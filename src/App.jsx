@@ -245,6 +245,23 @@ const MoneyInput = memo(function MoneyInput({ value, onChange, className = "", p
   );
 });
 
+// Fila editable de un ingreso extra o gasto inesperado: la descripción y el
+// monto se pueden corregir después de agregados, igual que en las demás listas.
+const MiniListItem = memo(function MiniListItem({ x, onUpdate, onRemove }) {
+  return (
+    <div className="item">
+      <span className="mini-edit-fields">
+        <input type="text" value={x.desc} onChange={(ev) => onUpdate(x.id, "desc", ev.target.value)} />
+        <span className="day">día {x.day}</span>
+      </span>
+      <span style={{ display: "flex", alignItems: "center" }}>
+        <MoneyInput value={x.amount} onChange={(val) => onUpdate(x.id, "amount", val)} />
+        <button className="del" style={{ padding: 0 }} onClick={() => onRemove(x.id)}><Trash2 size={13} /></button>
+      </span>
+    </div>
+  );
+});
+
 const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove }) {
   return (
     <div className="row">
@@ -398,6 +415,12 @@ const APP_STYLES = `
   .mini-list .item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
   .mini-list .item .amt { font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; margin-right: 6px; }
   .mini-list .day { color: #9a8f77; font-size: 0.72rem; margin-left: 6px; }
+  .mini-list .item input[type="text"] { border: none; border-bottom: 1px dashed transparent; background: transparent; font-family: -apple-system, sans-serif; font-size: 0.82rem; color: var(--ink); padding: 2px 0; min-width: 0; }
+  .mini-list .item input[type="text"]:focus { outline: none; border-bottom-color: var(--gold); }
+  .mini-list .item .money-input { border: none; border-bottom: 1px dashed transparent; background: transparent; width: 78px; text-align: right; padding: 2px 2px; margin-right: 6px; color: var(--ink); }
+  .mini-list .item .money-input:focus { outline: none; border-bottom-color: var(--gold); }
+  .mini-edit-fields { display: flex; align-items: center; flex: 1; min-width: 0; margin-right: 8px; }
+  .mini-edit-fields input[type="text"] { flex: 1; min-width: 0; }
   .plan-action { font-family: -apple-system, sans-serif; font-size: 0.85rem; background: rgba(63,107,70,0.08); border-left: 3px solid var(--free); padding: 10px 12px; margin: 10px 0; }
   .plan-action ul { margin: 6px 0 0; padding-left: 18px; }
   .plan-action li { margin-bottom: 5px; }
@@ -736,6 +759,18 @@ export default function FinanceLedger() {
     setNewUnexpected({ desc: "", amount: "" });
   }, [newUnexpected, now]);
 
+  const updateExtraIncome = useCallback(
+    (id, field, val) => setExtraIncomes((xs) => xs.map((x) => (x.id === id ? { ...x, [field]: val } : x))),
+    []
+  );
+  const removeExtraIncome = useCallback((id) => setExtraIncomes((xs) => xs.filter((x) => x.id !== id)), []);
+
+  const updateUnexpectedExpense = useCallback(
+    (id, field, val) => setUnexpectedExpenses((xs) => xs.map((x) => (x.id === id ? { ...x, [field]: val } : x))),
+    []
+  );
+  const removeUnexpectedExpense = useCallback((id) => setUnexpectedExpenses((xs) => xs.filter((x) => x.id !== id)), []);
+
   if (authLoading) {
     return <div style={{ background: "#16213e", minHeight: 100 }} />;
   }
@@ -855,12 +890,7 @@ export default function FinanceLedger() {
         {extraIncomes.length > 0 ? (
           <div className="mini-list">
             {extraIncomes.map((x) => (
-              <div className="item" key={x.id}>
-                <span>{x.desc}<span className="day">día {x.day}</span></span>
-                <span><span className="amt">${fmt(Number(x.amount))}</span>
-                  <button className="del" style={{ padding: 0 }} onClick={() => setExtraIncomes((xs) => xs.filter((y) => y.id !== x.id))}><Trash2 size={13} /></button>
-                </span>
-              </div>
+              <MiniListItem key={x.id} x={x} onUpdate={updateExtraIncome} onRemove={removeExtraIncome} />
             ))}
             <div className="item" style={{ borderBottom: "none", fontWeight: 700 }}>
               <span>{extraIncomes.length} ingreso{extraIncomes.length === 1 ? "" : "s"} extra este mes</span>
@@ -910,12 +940,7 @@ export default function FinanceLedger() {
         {unexpectedExpenses.length > 0 ? (
           <div className="mini-list">
             {unexpectedExpenses.map((x) => (
-              <div className="item" key={x.id}>
-                <span>{x.desc}<span className="day">día {x.day}</span></span>
-                <span><span className="amt">${fmt(Number(x.amount))}</span>
-                  <button className="del" style={{ padding: 0 }} onClick={() => setUnexpectedExpenses((xs) => xs.filter((y) => y.id !== x.id))}><Trash2 size={13} /></button>
-                </span>
-              </div>
+              <MiniListItem key={x.id} x={x} onUpdate={updateUnexpectedExpense} onRemove={removeUnexpectedExpense} />
             ))}
             <div className="item" style={{ borderBottom: "none", fontWeight: 700 }}>
               <span>Total inesperados este mes</span>
