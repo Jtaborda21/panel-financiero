@@ -25,7 +25,6 @@ Los datos se guardan en Supabase (Postgres + autenticación), no en el localStor
 - Cada usuario inicia sesión con su correo y contraseña.
 - Los datos quedan asociados a esa cuenta y se sincronizan automáticamente entre cualquier dispositivo donde inicies sesión con el mismo correo (PC, celular, etc.).
 - La tabla `user_data` en Supabase usa Row Level Security para que cada usuario solo pueda ver y modificar sus propios datos.
-- La sección "Respaldo manual" dentro de la app sigue disponible como copia extra en texto, por si quieres guardarla aparte o pasarla a otra cuenta.
 
 ## Estructura
 
