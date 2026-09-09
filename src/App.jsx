@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
+import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
 import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, Pencil, ChevronDown, RefreshCw } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
@@ -101,7 +101,7 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
 /* ------------------------------------------------------------------ */
 
 // Gráfico sencillo de barras: ingresos vs gastos mes a mes.
-function MonthlyChart({ data }) {
+const MonthlyChart = memo(function MonthlyChart({ data }) {
   const max = Math.max(1, ...data.map((d) => Math.max(d.income, d.expenses)));
   const barW = 16;
   const gap = 10;
@@ -128,16 +128,16 @@ function MonthlyChart({ data }) {
       </svg>
     </div>
   );
-}
+});
 
-function ChartLegend() {
+const ChartLegend = memo(function ChartLegend() {
   return (
     <div style={{ display: "flex", gap: 14, marginTop: 6, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#6b6455" }}>
       <span><span className="legend-dot" style={{ background: "var(--free)" }} />Ingresos</span>
       <span><span className="legend-dot" style={{ background: "var(--debt)" }} />Gastos</span>
     </div>
   );
-}
+});
 
 function Header({ email, onRefresh, onSignOut }) {
   return (
@@ -153,7 +153,7 @@ function Header({ email, onRefresh, onSignOut }) {
   );
 }
 
-function StatsSnapshot({ totalIncome, totalExpenses, totalMinPayments, disponible }) {
+const StatsSnapshot = memo(function StatsSnapshot({ totalIncome, totalExpenses, totalMinPayments, disponible }) {
   return (
     <div className="snapshot">
       <div className="stat"><div className="label">Ingreso total</div><div className="value">${fmt(totalIncome)}</div></div>
@@ -165,7 +165,7 @@ function StatsSnapshot({ totalIncome, totalExpenses, totalMinPayments, disponibl
       </div>
     </div>
   );
-}
+});
 
 function AuthScreen({ mode, email, password, error, msg, submitting, onEmailChange, onPasswordChange, onSubmit, onToggleMode }) {
   return (
@@ -195,7 +195,7 @@ function AuthScreen({ mode, email, password, error, msg, submitting, onEmailChan
 
 // Línea de estado (vencimiento, cuotas restantes, plazo límite) compartida
 // entre la vista resumida y la vista expandida de una deuda/cuota.
-function DebtStatusLine({ item, now }) {
+const DebtStatusLine = memo(function DebtStatusLine({ item, now }) {
   const dueIn = daysUntilDue(item.dueDay, now);
   const cuotasRestantes = Number(item.minPayment) > 0 ? Math.ceil(Number(item.balance) / Number(item.minPayment)) : null;
   const deadlineDays = daysUntilDate(item.deadlineDate, now);
@@ -224,11 +224,11 @@ function DebtStatusLine({ item, now }) {
       )}
     </div>
   );
-}
+});
 
 // Input de dinero: muestra el valor con puntos de miles (estilo es-CO) y en
 // negrilla, igual que los saldos de deuda, pero guarda un número plano.
-function MoneyInput({ value, onChange, className = "", placeholder }) {
+const MoneyInput = memo(function MoneyInput({ value, onChange, className = "", placeholder }) {
   const display = value === "" || value === null || value === undefined ? "" : fmt(Number(value));
   return (
     <input
@@ -243,9 +243,9 @@ function MoneyInput({ value, onChange, className = "", placeholder }) {
       }}
     />
   );
-}
+});
 
-function FixedExpenseRow({ item, onUpdate, onRemove }) {
+const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove }) {
   return (
     <div className="row">
       <span className="type-tag fijo">Fijo</span>
@@ -254,11 +254,11 @@ function FixedExpenseRow({ item, onUpdate, onRemove }) {
       <button className="del" onClick={() => onRemove(item.id)}><Trash2 size={15} /></button>
     </div>
   );
-}
+});
 
 // Una deuda, tarjeta o compra a cuotas — también sirve para modelar una
 // meta de ahorro (tasa 0%, saldo = lo que falta reunir, fecha límite = meta).
-function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onUpdateInstallments }) {
+const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onUpdateInstallments }) {
   if (!expanded) {
     return (
       <div className="debt-card">
@@ -321,7 +321,7 @@ function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onU
       <DebtStatusLine item={item} now={now} />
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ */
 /* Hoja de estilos                                                     */
@@ -402,7 +402,6 @@ const APP_STYLES = `
   .plan-action ul { margin: 6px 0 0; padding-left: 18px; }
   .plan-action li { margin-bottom: 5px; }
   .plan-action b { font-family: 'SFMono-Regular', Consolas, monospace; }
-  .disclaimer { font-family: -apple-system, sans-serif; font-size: 0.68rem; color: #9a8f77; margin-top: 8px; font-style: italic; }
   .debt-card { border-bottom: 1px solid var(--line); padding: 8px 0; margin-bottom: 2px; }
   .debt-card-expanded { border-bottom: 1px solid var(--line); padding-bottom: 6px; margin-bottom: 6px; }
   .debt-card-top { display: flex; align-items: center; gap: 8px; }
