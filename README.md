@@ -1,6 +1,6 @@
 # Panel financiero
 
-App personal de finanzas hecha en React + Vite: ingresos, gastos fijos, deudas y compras a cuotas, metas de ahorro, y un plan de pago automático (método avalancha o bola de nieve).
+App personal de finanzas hecha en React + Vite: ingresos, gastos fijos, deudas y compras a cuotas, y un plan de pago automático (método avalancha o bola de nieve). Una meta de ahorro se modela como una deuda con tasa 0% y fecha límite.
 
 ## Cómo correrla
 
@@ -28,7 +28,7 @@ Los datos se guardan en Supabase (Postgres + autenticación), no en el localStor
 
 ## Estructura
 
-- `src/App.jsx` — toda la lógica y la interfaz de la app.
+- `src/App.jsx` — toda la lógica y la interfaz de la app, organizada en componentes pequeños (Header, StatsSnapshot, MonthlyChart, DebtItem, etc.).
 - `src/main.jsx` — punto de entrada de React.
 - `src/supabaseClient.js` — cliente de Supabase inicializado con las variables de entorno.
 - `src/index.css` — estilos base mínimos (el resto de estilos vive dentro de App.jsx).
