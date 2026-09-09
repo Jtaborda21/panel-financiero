@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank, Pencil, ChevronDown } from "lucide-react";
+import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank, Pencil, ChevronDown, RefreshCw } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -542,7 +542,12 @@ export default function FinanceLedger() {
       <div className="subtitle">Ingreso, gastos, deudas, ahorro y plan de pago — mes actual</div>
       <div style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#c9c2ad", marginTop: -12, marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <span>Sesión: <b style={{ color: "#e0d9c4" }}>{session.user.email}</b></span>
-        <button onClick={handleSignOut} style={{ background: "none", border: "none", color: "var(--gold)", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", padding: 0 }}>cerrar sesión</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={() => window.location.reload()} title="Refrescar" style={{ background: "none", border: "none", color: "var(--gold)", display: "flex", alignItems: "center", cursor: "pointer", padding: 0 }}>
+            <RefreshCw size={14} />
+          </button>
+          <button onClick={handleSignOut} style={{ background: "none", border: "none", color: "var(--gold)", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", padding: 0 }}>cerrar sesión</button>
+        </div>
       </div>
 
       <div className="snapshot">
