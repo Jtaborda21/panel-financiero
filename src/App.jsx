@@ -226,12 +226,31 @@ function DebtStatusLine({ item, now }) {
   );
 }
 
+// Input de dinero: muestra el valor con puntos de miles (estilo es-CO) y en
+// negrilla, igual que los saldos de deuda, pero guarda un número plano.
+function MoneyInput({ value, onChange, className = "", placeholder }) {
+  const display = value === "" || value === null || value === undefined ? "" : fmt(Number(value));
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      className={`money-input ${className}`.trim()}
+      placeholder={placeholder}
+      value={display}
+      onChange={(ev) => {
+        const digits = ev.target.value.replace(/[^\d]/g, "");
+        onChange(digits === "" ? "" : String(Number(digits)));
+      }}
+    />
+  );
+}
+
 function FixedExpenseRow({ item, onUpdate, onRemove }) {
   return (
     <div className="row">
       <span className="type-tag fijo">Fijo</span>
       <input type="text" value={item.name} onChange={(ev) => onUpdate(item.id, "name", ev.target.value)} />
-      <input type="number" value={item.amount} onChange={(ev) => onUpdate(item.id, "amount", ev.target.value)} />
+      <MoneyInput value={item.amount} onChange={(val) => onUpdate(item.id, "amount", val)} />
       <button className="del" onClick={() => onRemove(item.id)}><Trash2 size={15} /></button>
     </div>
   );
@@ -401,6 +420,15 @@ const APP_STYLES = `
   .subfields input[type="date"] { font-size: 0.7rem; }
   .deadline-note { margin-top: 6px; padding-left: 2px; }
   .deadline-note input { display: block; width: 100%; border: none; border-bottom: 1px dashed var(--line); background: transparent; font-family: -apple-system, sans-serif; font-size: 0.72rem; padding: 3px 0; color: #6b6455; }
+  .money-input { font-weight: 700; font-variant-numeric: tabular-nums; }
+  .row input.money-input { width: 92px; flex: none; border: none; border-bottom: 1px dashed var(--line); background: transparent; font-family: 'SFMono-Regular', Consolas, monospace; text-align: right; padding: 4px 2px; color: var(--ink); }
+  .chart-filter { display: flex; gap: 8px; margin: 0 0 10px; }
+  .chart-filter button { flex: 1; font-family: -apple-system, sans-serif; font-size: 0.74rem; font-weight: 600; padding: 6px 4px; border: 1.5px solid var(--ink); background: transparent; color: var(--ink); cursor: pointer; }
+  .chart-filter button.active { background: var(--ink); color: var(--paper); }
+  .chart-values { font-family: -apple-system, sans-serif; font-size: 0.76rem; margin-top: 10px; max-height: 220px; overflow-y: auto; }
+  .chart-value-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+  .chart-value-label { color: #6b6455; font-weight: 600; text-transform: capitalize; }
+  .chart-value-nums { display: flex; gap: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; }
 `;
 
 /* ------------------------------------------------------------------ */
@@ -423,6 +451,7 @@ export default function FinanceLedger() {
   const [newUnexpected, setNewUnexpected] = useState({ desc: "", amount: "" });
   const [expandedDebtIds, setExpandedDebtIds] = useState([]);
   const [paydayPickerOpen, setPaydayPickerOpen] = useState(false);
+  const [chartMode, setChartMode] = useState("mes"); // "año" | "mes" | "día"
 
   const loadedRef = useRef(false);
   const monthsRef = useRef({});
@@ -549,16 +578,22 @@ export default function FinanceLedger() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomeFixed, paydays, items, method, extraIncomes, unexpectedExpenses, mKey, session]);
 
+  // Snapshot combinado: todos los meses guardados + el mes en curso con sus
+  // totales recién calculados (aún no persistidos).
+  const allMonthsMap = useMemo(
+    () => ({ ...monthsSnapshot, [mKey]: { totalIncome, totalExpenses: totalExpenses + totalMinPayments } }),
+    [monthsSnapshot, mKey, totalIncome, totalExpenses, totalMinPayments]
+  );
+
   const monthlyChartData = useMemo(() => {
-    const map = { ...monthsSnapshot, [mKey]: { totalIncome, totalExpenses: totalExpenses + totalMinPayments } };
-    const keys = Object.keys(map).sort((a, b) => {
+    const keys = Object.keys(allMonthsMap).sort((a, b) => {
       const [ay, am] = a.split("-").map(Number);
       const [by, bm] = b.split("-").map(Number);
       return ay * 12 + am - (by * 12 + bm);
     });
-    return keys.slice(-6).map((k) => {
+    return keys.slice(-12).map((k) => {
       const [, m] = k.split("-").map(Number);
-      const entry = map[k] || {};
+      const entry = allMonthsMap[k] || {};
       return {
         key: k,
         label: MONTH_NAMES[(m - 1 + 12) % 12].slice(0, 3),
@@ -566,7 +601,21 @@ export default function FinanceLedger() {
         expenses: Number(entry.totalExpenses) || 0,
       };
     });
-  }, [monthsSnapshot, mKey, totalIncome, totalExpenses, totalMinPayments]);
+  }, [allMonthsMap]);
+
+  const yearlyChartData = useMemo(() => {
+    const byYear = {};
+    Object.entries(allMonthsMap).forEach(([k, v]) => {
+      const [y] = k.split("-").map(Number);
+      if (!byYear[y]) byYear[y] = { income: 0, expenses: 0 };
+      byYear[y].income += Number(v.totalIncome) || 0;
+      byYear[y].expenses += Number(v.totalExpenses) || 0;
+    });
+    return Object.keys(byYear)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .map((y) => ({ key: String(y), label: String(y), income: byYear[y].income, expenses: byYear[y].expenses }));
+  }, [allMonthsMap]);
 
   const plan = useMemo(() => {
     if (disponible <= 0) return null;
@@ -587,6 +636,42 @@ export default function FinanceLedger() {
   );
   const perPaydayMin = sortedPaydays.length > 0 ? totalMinPayments / sortedPaydays.length : totalMinPayments;
   const lastPayday = sortedPaydays[sortedPaydays.length - 1];
+
+  // Vista por día: solo existe detalle con fecha para el mes en curso
+  // (ingresos extra, gastos inesperados, sueldo repartido en días de pago
+  // y deudas/cuotas con día de pago fijo).
+  const dailyChartData = useMemo(() => {
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const incomeByDay = {};
+    const expenseByDay = {};
+    extraIncomes.forEach((x) => {
+      incomeByDay[x.day] = (incomeByDay[x.day] || 0) + Number(x.amount || 0);
+    });
+    unexpectedExpenses.forEach((x) => {
+      expenseByDay[x.day] = (expenseByDay[x.day] || 0) + Number(x.amount || 0);
+    });
+    if (sortedPaydays.length > 0 && Number(incomeFixed) > 0) {
+      const perPayday = Number(incomeFixed) / sortedPaydays.length;
+      sortedPaydays.forEach((p) => {
+        if (p <= daysInMonth) incomeByDay[p] = (incomeByDay[p] || 0) + perPayday;
+      });
+    }
+    debtItems.forEach((d) => {
+      const day = Number(d.dueDay);
+      if (day >= 1 && day <= daysInMonth && Number(d.minPayment) > 0) {
+        expenseByDay[day] = (expenseByDay[day] || 0) + Number(d.minPayment);
+      }
+    });
+    const out = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const income = incomeByDay[day] || 0;
+      const expenses = expenseByDay[day] || 0;
+      if (income > 0 || expenses > 0) out.push({ key: `d${day}`, label: String(day), income, expenses });
+    }
+    return out;
+  }, [extraIncomes, unexpectedExpenses, sortedPaydays, incomeFixed, debtItems, now]);
+
+  const chartData = chartMode === "año" ? yearlyChartData : chartMode === "día" ? dailyChartData : monthlyChartData;
 
   const updateItem = useCallback(
     (id, field, val) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, [field]: val } : x))),
@@ -689,16 +774,42 @@ export default function FinanceLedger() {
       />
 
       <div className="sheet">
-        <h2>Ingresos y gastos por mes</h2>
-        <MonthlyChart data={monthlyChartData} />
-        <ChartLegend />
+        <h2>Ingresos y gastos</h2>
+        <div className="chart-filter">
+          <button className={chartMode === "año" ? "active" : ""} onClick={() => setChartMode("año")}>Año</button>
+          <button className={chartMode === "mes" ? "active" : ""} onClick={() => setChartMode("mes")}>Mes</button>
+          <button className={chartMode === "día" ? "active" : ""} onClick={() => setChartMode("día")}>Día</button>
+        </div>
+        {chartData.length > 0 ? (
+          <>
+            <MonthlyChart data={chartData} />
+            <ChartLegend />
+            <div className="chart-values">
+              {chartData.map((d) => (
+                <div className="chart-value-row" key={d.key}>
+                  <span className="chart-value-label">{chartMode === "día" ? `Día ${d.label}` : d.label}</span>
+                  <span className="chart-value-nums">
+                    <span style={{ color: "var(--free)" }}>+${fmt(d.income)}</span>
+                    <span style={{ color: "var(--debt)" }}>-${fmt(d.expenses)}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>
+            {chartMode === "día"
+              ? "Sin movimientos con fecha registrados este mes (ingresos extra, gastos inesperados, días de pago o vencimientos de deudas)."
+              : "Aún no hay datos suficientes para mostrar el gráfico."}
+          </p>
+        )}
       </div>
 
       <div className="sheet">
         <h2>Ingreso fijo</h2>
         <div className="field">
           <span>Sueldo fijo mensual</span>
-          <input type="number" value={incomeFixed} onChange={(e) => setIncomeFixed(e.target.value)} />
+          <MoneyInput value={incomeFixed} onChange={setIncomeFixed} />
         </div>
         <div className="payday-hint"><CalendarDays size={13} />Días de pago</div>
         <div className="chips" style={{ marginBottom: 8 }}>
