@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank, Sparkles, Undo2, KeyRound } from "lucide-react";
+import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank } from "lucide-react";
+import { supabase } from "./supabaseClient";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
@@ -11,31 +12,6 @@ const DEFAULT_ITEMS = [
   { id: uid(), type: "fijo", name: "Servicios y celular", amount: 0 },
   { id: uid(), type: "deuda", name: "Deuda 1", balance: 0, rate: 0, minPayment: 0, totalInstallments: "", dueDay: "", deadlineDate: "", deadlineNote: "" },
 ];
-
-// --- Almacenamiento local (reemplaza el window.storage del entorno de artifacts) ---
-// Todo queda guardado en el navegador del usuario (localStorage), por eso no
-// sincroniza automáticamente entre dispositivos: para eso está la sección de
-// "Respaldo manual" (exportar/importar texto) que ya trae la app.
-const storage = {
-  get(key) {
-    try {
-      const raw = window.localStorage.getItem(key);
-      return raw === null ? null : { value: raw };
-    } catch (err) {
-      return null;
-    }
-  },
-  set(key, value) {
-    try {
-      window.localStorage.setItem(key, value);
-    } catch (err) {}
-  },
-  delete(key) {
-    try {
-      window.localStorage.removeItem(key);
-    } catch (err) {}
-  },
-};
 
 function daysUntilDue(dueDay, today) {
   const day = Number(dueDay);
@@ -86,11 +62,6 @@ function fmt(n) {
 
 function monthKey(d = new Date()) {
   return `${d.getFullYear()}-${d.getMonth() + 1}`;
-}
-
-function keySafe(s) {
-  const clean = (s || "").trim().toLowerCase().replace(/[\s\/\\'"]+/g, "-");
-  return clean.slice(0, 60) || "default";
 }
 
 const MONTH_NAMES = [
@@ -170,144 +141,121 @@ export default function FinanceLedger() {
   const [backupText, setBackupText] = useState("");
   const [importText, setImportText] = useState("");
   const [backupMsg, setBackupMsg] = useState("");
-  const [botInput, setBotInput] = useState("");
-  const [botLoading, setBotLoading] = useState(false);
-  const [botMessage, setBotMessage] = useState("");
-  const [botLastAction, setBotLastAction] = useState(null);
 
   const loadedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
+  const monthsRef = useRef({});
 
-  const [passphrase, setPassphrase] = useState(null);
-  const [checkingDevice, setCheckingDevice] = useState(true);
-  const [pkInput, setPkInput] = useState("");
-
-  // Clave de Anthropic que el propio usuario pega para usar el clasificador
-  // de IA. Se guarda solo en este navegador (localStorage), nunca se envía
-  // a ningún servidor propio: va directo del navegador a la API de Anthropic.
-  const [apiKey, setApiKey] = useState("");
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [showApiKeyForm, setShowApiKeyForm] = useState(false);
+  // --- Autenticación con Supabase (email y contraseña) ---
+  // La sesión viene de Supabase Auth; los datos de cada usuario se guardan en
+  // la tabla "user_data" de Supabase, así se sincronizan entre cualquier
+  // dispositivo donde inicie sesión con el mismo correo.
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState("signin"); // "signin" | "signup"
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authMsg, setAuthMsg] = useState("");
+  const [authSubmitting, setAuthSubmitting] = useState(false);
 
   useEffect(() => {
-    const r = storage.get("device-passphrase");
-    if (r && r.value) setPassphrase(r.value);
-    const k = storage.get("anthropic-api-key");
-    if (k && k.value) setApiKey(k.value);
-    setCheckingDevice(false);
-  }, []);
-
-  const submitPassphrase = () => {
-    if (!pkInput.trim()) return;
-    const safe = keySafe(pkInput);
-    storage.set("device-passphrase", safe);
-    setPassphrase(safe);
-  };
-
-  const changePassphrase = () => {
-    storage.delete("device-passphrase");
-    loadedRef.current = false;
-    setLoaded(false);
-    setPkInput("");
-    setPassphrase(null);
-  };
-
-  const saveApiKey = () => {
-    const trimmed = apiKeyInput.trim();
-    if (!trimmed) return;
-    storage.set("anthropic-api-key", trimmed);
-    setApiKey(trimmed);
-    setApiKeyInput("");
-    setShowApiKeyForm(false);
-  };
-
-  const clearApiKey = () => {
-    storage.delete("anthropic-api-key");
-    setApiKey("");
-  };
-
-  // Migra el formato viejo (expenses[] + debts[]) al nuevo items[] unificado
-  function migrateToItems(c) {
-    if (c.items) return c.items;
-    const out = [];
-    (c.expenses || []).forEach((e) => {
-      const cuotas = Number(e.installments);
-      if (e.installments !== undefined && e.installments !== "" && cuotas > 0) {
-        out.push({
-          id: uid(), type: "deuda", name: e.name,
-          balance: Number(e.amount || 0) * cuotas, rate: 0, minPayment: Number(e.amount || 0),
-          totalInstallments: String(cuotas), dueDay: "", deadlineDate: "", deadlineNote: "",
-        });
-      } else {
-        out.push({ id: e.id || uid(), type: "fijo", name: e.name, amount: e.amount });
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+      if (!newSession) {
+        loadedRef.current = false;
+        setLoaded(false);
+        monthsRef.current = {};
       }
     });
-    (c.debts || []).forEach((d) => {
-      out.push({
-        id: d.id || uid(), type: "deuda", name: d.name, balance: d.balance, rate: d.rate,
-        minPayment: d.minPayment, totalInstallments: d.totalInstallments || "",
-        dueDay: d.dueDay || "", deadlineDate: d.deadlineDate || "", deadlineNote: d.deadlineNote || "",
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  const handleAuthSubmit = async () => {
+    const email = authEmail.trim();
+    if (!email || !authPassword) return;
+    setAuthSubmitting(true);
+    setAuthError("");
+    setAuthMsg("");
+    if (authMode === "signup") {
+      const { data, error } = await supabase.auth.signUp({ email, password: authPassword });
+      if (error) {
+        setAuthError(error.message);
+      } else if (!data.session) {
+        setAuthMsg("Cuenta creada. Revisa tu correo para confirmarla antes de entrar.");
+      }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: authPassword });
+      if (error) setAuthError(error.message);
+    }
+    setAuthSubmitting(false);
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+  };
+
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("user_data")
+        .select("config, months")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+      if (cancelled) return;
+
+      if (error) {
+        console.error("No se pudieron cargar tus datos:", error.message);
+      }
+
+      const config = (data && data.config) || {};
+      const months = (data && data.months) || {};
+      monthsRef.current = months;
+
+      if (config.incomeFixed !== undefined) setIncomeFixed(config.incomeFixed);
+      if (config.paydays) setPaydays(config.paydays);
+      if (config.items) setItems(config.items);
+      if (config.savingsGoals) setSavingsGoals(config.savingsGoals);
+      if (config.method) setMethod(config.method);
+
+      const monthData = months[mKey];
+      if (monthData) {
+        if (monthData.extraIncomes) setExtraIncomes(monthData.extraIncomes);
+        if (monthData.unexpectedExpenses) setUnexpectedExpenses(monthData.unexpectedExpenses);
+      }
+
+      loadedRef.current = true;
+      setLoaded(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session]);
+
+  useEffect(() => {
+    if (!loadedRef.current || !session) return;
+    const nextMonths = { ...monthsRef.current, [mKey]: { extraIncomes, unexpectedExpenses } };
+    monthsRef.current = nextMonths;
+    const t = setTimeout(async () => {
+      const { error } = await supabase.from("user_data").upsert({
+        user_id: session.user.id,
+        config: { incomeFixed, paydays, items, savingsGoals, method },
+        months: nextMonths,
+        updated_at: new Date().toISOString(),
       });
-    });
-    return out.length > 0 ? out : null;
-  }
-
-  useEffect(() => {
-    if (!passphrase) return;
-
-    let finalItems = null;
-    let finalGoals = null;
-    let finalIncomeFixed, finalPaydays, finalMethod;
-
-    const cfg = storage.get(`sync:${passphrase}:config`);
-    if (cfg && cfg.value) {
-      try {
-        const c = JSON.parse(cfg.value);
-        finalIncomeFixed = c.incomeFixed;
-        finalPaydays = c.paydays;
-        finalMethod = c.method;
-        finalGoals = c.savingsGoals || [];
-        finalItems = migrateToItems(c);
-      } catch (err) {}
-    }
-
-    if (finalIncomeFixed !== undefined) setIncomeFixed(finalIncomeFixed);
-    if (finalPaydays) setPaydays(finalPaydays);
-    if (finalMethod) setMethod(finalMethod);
-    if (finalItems) setItems(finalItems);
-    if (finalGoals) setSavingsGoals(finalGoals);
-
-    let monthData = null;
-    const m = storage.get(`sync:${passphrase}:month:${mKey}`);
-    if (m && m.value) {
-      try {
-        monthData = JSON.parse(m.value);
-      } catch (err) {}
-    }
-    if (monthData) {
-      if (monthData.extraIncomes) setExtraIncomes(monthData.extraIncomes);
-      if (monthData.unexpectedExpenses) setUnexpectedExpenses(monthData.unexpectedExpenses);
-    }
-
-    loadedRef.current = true;
-    setLoaded(true);
-  }, [mKey, passphrase]);
-
-  useEffect(() => {
-    if (!loadedRef.current || !passphrase) return;
-    const t = setTimeout(() => {
-      storage.set(`sync:${passphrase}:config`, JSON.stringify({ incomeFixed, paydays, items, savingsGoals, method }));
+      if (error) console.error("No se pudo guardar:", error.message);
     }, 400);
     return () => clearTimeout(t);
-  }, [incomeFixed, paydays, items, savingsGoals, method, passphrase]);
-
-  useEffect(() => {
-    if (!loadedRef.current || !passphrase) return;
-    const t = setTimeout(() => {
-      storage.set(`sync:${passphrase}:month:${mKey}`, JSON.stringify({ extraIncomes, unexpectedExpenses }));
-    }, 400);
-    return () => clearTimeout(t);
-  }, [extraIncomes, unexpectedExpenses, mKey, passphrase]);
+  }, [incomeFixed, paydays, items, savingsGoals, method, extraIncomes, unexpectedExpenses, mKey, session]);
 
   const fixedItems = items.filter((it) => it.type === "fijo");
   const debtItems = items.filter((it) => it.type === "deuda");
@@ -426,133 +374,6 @@ export default function FinanceLedger() {
     }
   };
 
-  const handleBotSubmit = async () => {
-    if (!botInput.trim()) return;
-    if (!apiKey) {
-      setShowApiKeyForm(true);
-      setBotMessage("Primero necesitas pegar tu API key de Anthropic para usar el clasificador (ver abajo).");
-      return;
-    }
-    setBotLoading(true);
-    setBotMessage("");
-    setBotLastAction(null);
-    try {
-      const prompt = `Eres un clasificador de frases informales en español sobre dinero para una app de finanzas personales. Hoy es ${now.toISOString().slice(0, 10)} (formato AAAA-MM-DD).
-
-Frase del usuario: "${botInput.replace(/"/g, "'")}"
-
-Clasifícala en uno de estos tipos y responde SOLO con un objeto JSON válido, sin texto adicional, sin markdown, sin explicaciones:
-
-1. Gasto inesperado (compró o gastó algo una sola vez, sin cuotas):
-{"type":"gasto_inesperado","name":"...","amount":numero}
-
-2. Deuda o compra a cuotas (menciona cuotas, plazos, o una deuda):
-{"type":"deuda","name":"...","balance":numero_total,"installments":numero_de_cuotas_o_null,"minPayment":valor_de_cada_cuota_o_null,"rate":numero_o_0}
-
-3. Meta de ahorro (quiere ahorrar o juntar dinero para algo futuro):
-{"type":"ahorro","name":"...","targetAmount":numero_o_null,"targetDate":"AAAA-MM-DD"_o_null}
-
-4. Ingreso extra (le pagaron algo, ganó dinero, recibió un ingreso adicional):
-{"type":"ingreso_extra","name":"...","amount":numero}
-
-5. Si no logras entenderlo o no aplica a ninguna categoría:
-{"type":"desconocido"}
-
-Si menciona "N cuotas de X", balance = X * N y minPayment = X. Los montos son en pesos, sin puntos ni comas, solo el número. Responde solo el JSON, nada más.`;
-
-      let res, data;
-      try {
-        res = await fetch("https://api.anthropic.com/v1/messages", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "anthropic-version": "2023-06-01",
-            "x-api-key": apiKey,
-            "anthropic-dangerous-direct-browser-access": "true",
-          },
-          body: JSON.stringify({
-            model: "claude-sonnet-4-5",
-            max_tokens: 300,
-            messages: [{ role: "user", content: prompt }],
-          }),
-        });
-        data = await res.json();
-      } catch (netErr) {
-        setBotMessage("No se pudo conectar con el servicio. Revisa tu internet e intenta de nuevo.");
-        setBotLoading(false);
-        return;
-      }
-
-      if (!res.ok) {
-        const errMsg = (data && data.error && data.error.message) || `Error ${res.status}`;
-        if (res.status === 401) {
-          setBotMessage("Tu API key parece inválida o vencida. Revísala abajo.");
-          setShowApiKeyForm(true);
-        } else {
-          setBotMessage(`El servicio respondió con un error: ${errMsg}`);
-        }
-        setBotLoading(false);
-        return;
-      }
-
-      const raw = (data.content || []).map((c) => c.text || "").join("");
-      const match = raw.match(/\{[\s\S]*\}/);
-      let parsed;
-      try {
-        parsed = JSON.parse(match ? match[0] : raw.replace(/```json|```/g, "").trim());
-      } catch (parseErr) {
-        setBotMessage(`No entendí la respuesta del clasificador. Intenta reformular, ej: "gasté 15000 en salchipapas".`);
-        setBotLoading(false);
-        return;
-      }
-
-      if (parsed.type === "gasto_inesperado" && parsed.amount) {
-        const newId = uid();
-        setUnexpectedExpenses((xs) => [...xs, { id: newId, desc: parsed.name || "Gasto", amount: parsed.amount, day: now.getDate() }]);
-        setBotMessage(`Agregado a Gasto inesperado: ${parsed.name} — $${fmt(Number(parsed.amount))}`);
-        setBotLastAction({ list: "unexpectedExpenses", id: newId });
-      } else if (parsed.type === "deuda" && parsed.balance) {
-        const newId = uid();
-        const cuotas = parsed.installments ? Number(parsed.installments) : "";
-        const minPay = parsed.minPayment ? Number(parsed.minPayment) : cuotas ? Math.round(Number(parsed.balance) / cuotas) : 0;
-        setItems((xs) => [...xs, {
-          id: newId, type: "deuda", name: parsed.name || "Compra a cuotas",
-          balance: Number(parsed.balance), rate: Number(parsed.rate) || 0, minPayment: minPay,
-          totalInstallments: cuotas ? String(cuotas) : "", dueDay: "", deadlineDate: "", deadlineNote: "",
-        }]);
-        setBotMessage(`Agregado a Deudas y compras a cuotas: ${parsed.name} — $${fmt(Number(parsed.balance))}${cuotas ? ` en ${cuotas} cuotas` : ""}`);
-        setBotLastAction({ list: "items", id: newId });
-      } else if (parsed.type === "ahorro") {
-        const newId = uid();
-        setSavingsGoals((gs) => [...gs, { id: newId, name: parsed.name || "Meta de ahorro", savedAmount: 0, targetAmount: parsed.targetAmount || 0, targetDate: parsed.targetDate || "" }]);
-        setBotMessage(`Agregado a Metas de ahorro: ${parsed.name}${parsed.targetAmount ? ` — meta $${fmt(Number(parsed.targetAmount))}` : ""}`);
-        setBotLastAction({ list: "savingsGoals", id: newId });
-      } else if (parsed.type === "ingreso_extra" && parsed.amount) {
-        const newId = uid();
-        setExtraIncomes((xs) => [...xs, { id: newId, desc: parsed.name || "Ingreso extra", amount: parsed.amount, day: now.getDate() }]);
-        setBotMessage(`Agregado a Ingresos extra: ${parsed.name} — $${fmt(Number(parsed.amount))}`);
-        setBotLastAction({ list: "extraIncomes", id: newId });
-      } else {
-        setBotMessage("No logré entender bien eso — intenta ser más específico, ej: \"gasté 15000 en salchipapas\" o \"compré un tv a 5 cuotas de 80000\".");
-      }
-      setBotInput("");
-    } catch (err) {
-      setBotMessage("Algo salió mal procesando eso. Intenta de nuevo, o agrégalo manual abajo.");
-    }
-    setBotLoading(false);
-  };
-
-  const undoBotAction = () => {
-    if (!botLastAction) return;
-    const { list, id } = botLastAction;
-    if (list === "unexpectedExpenses") setUnexpectedExpenses((xs) => xs.filter((x) => x.id !== id));
-    if (list === "items") setItems((xs) => xs.filter((x) => x.id !== id));
-    if (list === "savingsGoals") setSavingsGoals((gs) => gs.filter((g) => g.id !== id));
-    if (list === "extraIncomes") setExtraIncomes((xs) => xs.filter((x) => x.id !== id));
-    setBotMessage("Deshecho.");
-    setBotLastAction(null);
-  };
-
   // Cálculo de metas de ahorro: cuánto falta ahorrar por mes para cada una
   const goalsCalc = savingsGoals.map((g) => {
     const remaining = Number(g.targetAmount || 0) - Number(g.savedAmount || 0);
@@ -565,11 +386,11 @@ Si menciona "N cuotas de X", balance = X * N y minPayment = X. Los montos son en
   });
   const totalRequiredMonthly = goalsCalc.reduce((s, g) => s + (g.remaining > 0 ? g.requiredMonthly : 0), 0);
 
-  if (checkingDevice) {
+  if (authLoading) {
     return <div style={{ background: "#16213e", minHeight: 100 }} />;
   }
 
-  if (!passphrase) {
+  if (!session) {
     return (
       <div className="ledger">
         <style>{`
@@ -579,15 +400,33 @@ Si menciona "N cuotas de X", balance = X * N y minPayment = X. Los montos son en
           .ledger input { width: 100%; box-sizing: border-box; font-family: -apple-system, sans-serif; font-size: 1rem; padding: 10px; margin: 14px 0; border: 1px solid var(--gold); background: rgba(251,248,241,0.06); color: var(--paper); }
           .ledger input:focus { outline: none; }
           .ledger button { width: 100%; padding: 11px; background: var(--gold); border: none; color: var(--ink); font-weight: 700; font-family: -apple-system, sans-serif; cursor: pointer; }
+          .ledger .linkbtn { background: none; color: var(--gold); font-weight: 600; text-decoration: underline; padding: 6px 0; }
         `}</style>
         <h1>Panel financiero</h1>
-        <p>Crea una clave de acceso (una palabra o código que tú inventes) para organizar tus datos en este navegador.</p>
-        <p style={{ color: "#e79aa6" }}>
-          Ojo: esto no es una contraseña segura de verdad, y tus datos quedan guardados solo en este navegador (no en un servidor). Usa la sección de "Respaldo manual" para llevarlos a otro dispositivo.
+        <p>
+          {authMode === "signup"
+            ? "Crea una cuenta para guardar tus datos y verlos desde cualquier dispositivo iniciando sesión con el mismo correo."
+            : "Inicia sesión con tu correo y contraseña para ver tus datos."}
         </p>
-        <input type="text" placeholder="Tu clave (ej: llave-verde27)" value={pkInput}
-          onChange={(e) => setPkInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submitPassphrase()} />
-        <button onClick={submitPassphrase}>Continuar</button>
+        {authError && <p style={{ color: "#e79aa6" }}>{authError}</p>}
+        {authMsg && <p style={{ color: "#a9d4ab" }}>{authMsg}</p>}
+        <input type="email" placeholder="Correo" value={authEmail}
+          onChange={(e) => setAuthEmail(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAuthSubmit()} />
+        <input type="password" placeholder="Contraseña" value={authPassword}
+          onChange={(e) => setAuthPassword(e.target.value)} onKeyDown={(e) => e.key === "Enter" && handleAuthSubmit()} />
+        <button onClick={handleAuthSubmit} disabled={authSubmitting}>
+          {authSubmitting ? "..." : authMode === "signup" ? "Crear cuenta" : "Entrar"}
+        </button>
+        <button
+          className="linkbtn"
+          onClick={() => {
+            setAuthMode((m) => (m === "signup" ? "signin" : "signup"));
+            setAuthError("");
+            setAuthMsg("");
+          }}
+        >
+          {authMode === "signup" ? "Ya tengo cuenta" : "Crear una cuenta nueva"}
+        </button>
       </div>
     );
   }
@@ -670,52 +509,8 @@ Si menciona "N cuotas de X", balance = X * N y minPayment = X. Los montos son en
       <h1>Panel financiero</h1>
       <div className="subtitle">Ingreso, gastos, deudas, ahorro y plan de pago — mes actual</div>
       <div style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#c9c2ad", marginTop: -12, marginBottom: 18, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <span>Clave local: <b style={{ color: "#e0d9c4" }}>{passphrase}</b></span>
-        <button onClick={changePassphrase} style={{ background: "none", border: "none", color: "var(--gold)", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", padding: 0 }}>cambiar</button>
-      </div>
-
-      <div className="sheet" style={{ borderLeft: "3px solid var(--gold)" }}>
-        <h2><Sparkles size={14} />Cuéntame qué hiciste</h2>
-        <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 8px" }}>
-          Escribe en tus palabras y yo lo clasifico: "gasté 15000 en salchipapas", "compré un tv a 5 cuotas de 80000", "quiero ahorrar 800000 para un celular en marzo".
-        </p>
-        <div className="quickadd">
-          <input type="text" placeholder="¿Qué hiciste?" value={botInput} onChange={(e) => setBotInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && !botLoading && handleBotSubmit()} />
-          <button className="go" onClick={handleBotSubmit} disabled={botLoading}>
-            {botLoading ? "..." : <Sparkles size={15} />}
-          </button>
-        </div>
-        {botMessage && (
-          <div style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.78rem", color: "var(--free)", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span>{botMessage}</span>
-            {botLastAction && (
-              <button onClick={undoBotAction} style={{ background: "none", border: "none", color: "var(--debt)", fontWeight: 700, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 3 }}>
-                <Undo2 size={13} /> deshacer
-              </button>
-            )}
-          </div>
-        )}
-        {apiKey ? (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.66rem", color: "#9a8f77", marginTop: 8, display: "flex", alignItems: "center", gap: 6 }}>
-            <KeyRound size={11} /> API key guardada en este navegador.
-            <button onClick={clearApiKey} style={{ background: "none", border: "none", color: "var(--debt)", cursor: "pointer", padding: 0, fontWeight: 600 }}>quitar</button>
-          </p>
-        ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.66rem", color: "#9a8f77", marginTop: 8, fontStyle: "italic" }}>
-            Necesitas tu propia API key de Anthropic (console.anthropic.com) para usar el clasificador.{" "}
-            <button onClick={() => setShowApiKeyForm((s) => !s)} style={{ background: "none", border: "none", color: "var(--gold)", cursor: "pointer", padding: 0, fontWeight: 700, textDecoration: "underline" }}>
-              {showApiKeyForm ? "cerrar" : "agregar mi API key"}
-            </button>
-          </p>
-        )}
-        {showApiKeyForm && (
-          <div className="apikey-box">
-            <input type="password" placeholder="sk-ant-..." value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && saveApiKey()} />
-            <button className="go2" style={{ padding: "6px 10px", fontSize: "0.72rem" }} onClick={saveApiKey}>Guardar clave</button>
-          </div>
-        )}
+        <span>Sesión: <b style={{ color: "#e0d9c4" }}>{session.user.email}</b></span>
+        <button onClick={handleSignOut} style={{ background: "none", border: "none", color: "var(--gold)", fontSize: "0.72rem", fontWeight: 700, cursor: "pointer", padding: 0 }}>cerrar sesión</button>
       </div>
 
       <div className="snapshot">
@@ -1046,7 +841,7 @@ Si menciona "N cuotas de X", balance = X * N y minPayment = X. Los montos son en
       <div className="sheet backup">
         <h2>Respaldo manual</h2>
         <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 8px" }}>
-          Tus datos viven solo en este navegador. Exporta tus datos como texto y guárdalo en Notas, correo, donde quieras — y así también los pasas a otro dispositivo pegándolos ahí.
+          Tus datos ya se sincronizan solos entre tus dispositivos con tu cuenta. Esto es solo una copia extra en texto, por si quieres guardarla aparte o pasarla a otra cuenta.
         </p>
         <button className="go2" onClick={exportBackup}>Exportar mis datos</button>
         {backupText && (
