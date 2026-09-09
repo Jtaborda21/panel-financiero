@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
-import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank } from "lucide-react";
+import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, PiggyBank, Pencil, ChevronDown } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -68,6 +68,36 @@ const MONTH_NAMES = [
   "enero", "febrero", "marzo", "abril", "mayo", "junio",
   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ];
+
+// Gráfico sencillo de barras: ingresos vs gastos mes a mes
+function MonthlyChart({ data }) {
+  const max = Math.max(1, ...data.map((d) => Math.max(d.income, d.expenses)));
+  const barW = 16;
+  const gap = 10;
+  const groupW = barW * 2 + 4;
+  const chartH = 90;
+  const width = data.length * (groupW + gap) + gap;
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <svg width={width} height={chartH + 22} viewBox={`0 0 ${width} ${chartH + 22}`} style={{ display: "block", minWidth: "100%" }}>
+        {data.map((d, i) => {
+          const x = gap + i * (groupW + gap);
+          const incomeH = (d.income / max) * chartH;
+          const expenseH = (d.expenses / max) * chartH;
+          return (
+            <g key={d.key}>
+              <rect x={x} y={chartH - incomeH} width={barW} height={incomeH} fill="var(--free)" rx="1.5" />
+              <rect x={x + barW + 4} y={chartH - expenseH} width={barW} height={expenseH} fill="var(--debt)" rx="1.5" />
+              <text x={x + groupW / 2} y={chartH + 15} textAnchor="middle" fontSize="9" fontFamily="-apple-system, sans-serif" fill="#6b6455">
+                {d.label}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
 
 // Simulación mensual del plan de pago (avalancha o bola de nieve)
 function simulateDebtPlan(debtsInput, extraBudget, method) {
@@ -138,13 +168,12 @@ export default function FinanceLedger() {
   const [newExtra, setNewExtra] = useState({ desc: "", amount: "" });
   const [newUnexpected, setNewUnexpected] = useState({ desc: "", amount: "" });
   const [newGoal, setNewGoal] = useState({ name: "", targetAmount: "", targetDate: "" });
-  const [backupText, setBackupText] = useState("");
-  const [importText, setImportText] = useState("");
-  const [backupMsg, setBackupMsg] = useState("");
+  const [expandedDebtIds, setExpandedDebtIds] = useState([]);
 
   const loadedRef = useRef(false);
   const [loaded, setLoaded] = useState(false);
   const monthsRef = useRef({});
+  const [monthsSnapshot, setMonthsSnapshot] = useState({});
 
   // --- Autenticación con Supabase (email y contraseña) ---
   // La sesión viene de Supabase Auth; los datos de cada usuario se guardan en
@@ -218,6 +247,7 @@ export default function FinanceLedger() {
       const config = (data && data.config) || {};
       const months = (data && data.months) || {};
       monthsRef.current = months;
+      setMonthsSnapshot(months);
 
       if (config.incomeFixed !== undefined) setIncomeFixed(config.incomeFixed);
       if (config.paydays) setPaydays(config.paydays);
@@ -243,8 +273,12 @@ export default function FinanceLedger() {
 
   useEffect(() => {
     if (!loadedRef.current || !session) return;
-    const nextMonths = { ...monthsRef.current, [mKey]: { extraIncomes, unexpectedExpenses } };
+    const nextMonths = {
+      ...monthsRef.current,
+      [mKey]: { extraIncomes, unexpectedExpenses, totalIncome, totalExpenses: totalExpenses + totalMinPayments },
+    };
     monthsRef.current = nextMonths;
+    setMonthsSnapshot(nextMonths);
     const t = setTimeout(async () => {
       const { error } = await supabase.from("user_data").upsert({
         user_id: session.user.id,
@@ -255,6 +289,7 @@ export default function FinanceLedger() {
       if (error) console.error("No se pudo guardar:", error.message);
     }, 400);
     return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomeFixed, paydays, items, savingsGoals, method, extraIncomes, unexpectedExpenses, mKey, session]);
 
   const fixedItems = items.filter((it) => it.type === "fijo");
@@ -267,6 +302,25 @@ export default function FinanceLedger() {
     unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalMinPayments = debtItems.reduce((s, d) => s + Number(d.minPayment || 0), 0);
   const disponible = totalIncome - totalExpenses - totalMinPayments;
+
+  const monthlyChartData = useMemo(() => {
+    const map = { ...monthsSnapshot, [mKey]: { totalIncome, totalExpenses: totalExpenses + totalMinPayments } };
+    const keys = Object.keys(map).sort((a, b) => {
+      const [ay, am] = a.split("-").map(Number);
+      const [by, bm] = b.split("-").map(Number);
+      return ay * 12 + am - (by * 12 + bm);
+    });
+    return keys.slice(-6).map((k) => {
+      const [, m] = k.split("-").map(Number);
+      const entry = map[k] || {};
+      return {
+        key: k,
+        label: MONTH_NAMES[(m - 1 + 12) % 12].slice(0, 3),
+        income: Number(entry.totalIncome) || 0,
+        expenses: Number(entry.totalExpenses) || 0,
+      };
+    });
+  }, [monthsSnapshot, mKey, totalIncome, totalExpenses, totalMinPayments]);
 
   const plan = useMemo(() => {
     if (disponible <= 0) return null;
@@ -308,12 +362,20 @@ export default function FinanceLedger() {
   };
 
   const addFijo = () => setItems((xs) => [...xs, { id: uid(), type: "fijo", name: "Nuevo gasto", amount: 0 }]);
-  const addDeuda = () =>
+  const addDeuda = () => {
+    const id = uid();
     setItems((xs) => [
       ...xs,
-      { id: uid(), type: "deuda", name: "Nueva deuda o compra", balance: 0, rate: 0, minPayment: 0, totalInstallments: "", dueDay: "", deadlineDate: "", deadlineNote: "" },
+      { id, type: "deuda", name: "Nueva deuda o compra", balance: 0, rate: 0, minPayment: 0, totalInstallments: "", dueDay: "", deadlineDate: "", deadlineNote: "" },
     ]);
-  const removeItem = (id) => setItems((xs) => xs.filter((x) => x.id !== id));
+    setExpandedDebtIds((xs) => [...xs, id]);
+  };
+  const removeItem = (id) => {
+    setItems((xs) => xs.filter((x) => x.id !== id));
+    setExpandedDebtIds((xs) => xs.filter((x) => x !== id));
+  };
+  const toggleDebtExpanded = (id) =>
+    setExpandedDebtIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
 
   const [paydayPickerOpen, setPaydayPickerOpen] = useState(false);
   const togglePayday = (n) =>
@@ -338,40 +400,6 @@ export default function FinanceLedger() {
     if (!newGoal.name.trim() || !newGoal.targetAmount) return;
     setSavingsGoals((gs) => [...gs, { id: uid(), name: newGoal.name, savedAmount: 0, targetAmount: newGoal.targetAmount, targetDate: newGoal.targetDate }]);
     setNewGoal({ name: "", targetAmount: "", targetDate: "" });
-  };
-
-  const exportBackup = () => {
-    const data = { incomeFixed, paydays, items, savingsGoals, method, extraIncomes, unexpectedExpenses, exportedMonth: mKey };
-    setBackupText(JSON.stringify(data, null, 2));
-    setBackupMsg("");
-  };
-
-  const copyBackup = async () => {
-    try {
-      await navigator.clipboard.writeText(backupText);
-      setBackupMsg("Copiado. Guárdalo en Notas o donde quieras.");
-    } catch (err) {
-      setBackupMsg("No se pudo copiar automático — selecciona el texto y cópialo a mano.");
-    }
-  };
-
-  const importBackup = () => {
-    try {
-      const data = JSON.parse(importText);
-      if (data.incomeFixed !== undefined) setIncomeFixed(data.incomeFixed);
-      if (data.paydays) setPaydays(data.paydays);
-      if (data.items) setItems(data.items);
-      if (data.savingsGoals) setSavingsGoals(data.savingsGoals);
-      if (data.method) setMethod(data.method);
-      if (data.exportedMonth === mKey) {
-        if (data.extraIncomes) setExtraIncomes(data.extraIncomes);
-        if (data.unexpectedExpenses) setUnexpectedExpenses(data.unexpectedExpenses);
-      }
-      setBackupMsg("Datos restaurados correctamente.");
-      setImportText("");
-    } catch (err) {
-      setBackupMsg("Ese texto no es un respaldo válido — revisa que lo hayas copiado completo.");
-    }
   };
 
   // Cálculo de metas de ahorro: cuánto falta ahorrar por mes para cada una
@@ -499,11 +527,15 @@ export default function FinanceLedger() {
         .goal-fields input { display: block; width: 100%; border: none; border-bottom: 1px dashed var(--line); background: transparent; font-family: 'SFMono-Regular', Consolas, monospace; padding: 3px 0; }
         .goal-progress { font-family: -apple-system, sans-serif; font-size: 0.72rem; margin-top: 6px; font-weight: 600; }
         .disclaimer { font-family: -apple-system, sans-serif; font-size: 0.68rem; color: #9a8f77; margin-top: 8px; font-style: italic; }
-        .backup textarea { width: 100%; box-sizing: border-box; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.68rem; padding: 8px; border: 1px solid var(--line); background: #fff; color: var(--ink); min-height: 90px; margin: 6px 0; }
-        .backup .go2 { background: var(--ink); color: var(--paper); border: none; padding: 8px 12px; font-family: -apple-system, sans-serif; font-size: 0.78rem; font-weight: 600; cursor: pointer; margin-right: 8px; margin-bottom: 8px; }
-        .backup .msg { font-family: -apple-system, sans-serif; font-size: 0.75rem; color: var(--free); margin: 4px 0; }
-        .apikey-box { background: rgba(184,145,47,0.08); border: 1px dashed var(--gold); padding: 10px; margin-top: 8px; }
-        .apikey-box input { width: 100%; box-sizing: border-box; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 0.78rem; padding: 7px; border: 1px solid var(--line); margin-bottom: 6px; }
+        .debt-card { border-bottom: 1px solid var(--line); padding: 8px 0; margin-bottom: 2px; }
+        .debt-card-top { display: flex; align-items: center; gap: 8px; }
+        .debt-card-name { flex: 1; font-family: -apple-system, sans-serif; font-size: 0.88rem; font-weight: 600; color: var(--ink); }
+        .debt-card-actions { display: flex; gap: 2px; }
+        .icon-btn { background: none; border: none; color: #9a8f77; cursor: pointer; padding: 4px; display: flex; align-items: center; }
+        .icon-btn:hover { color: var(--ink); }
+        .debt-card-numbers { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; padding-left: 2px; }
+        .debt-card-balance { font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; font-size: 1rem; font-weight: 700; color: var(--ink); }
+        .chip-mini { font-family: -apple-system, sans-serif; font-size: 0.68rem; font-weight: 600; color: #6b6455; background: rgba(28,27,31,0.06); padding: 2px 7px; border-radius: 10px; }
       `}</style>
 
       <h1>Panel financiero</h1>
@@ -520,6 +552,15 @@ export default function FinanceLedger() {
         <div className={`stat ${disponible >= 0 ? "free" : "debt"}`}>
           <div className="label">{disponible >= 0 ? "Disponible extra" : "Déficit"}</div>
           <div className="value">${fmt(Math.abs(disponible))}</div>
+        </div>
+      </div>
+
+      <div className="sheet">
+        <h2>Ingresos y gastos por mes</h2>
+        <MonthlyChart data={monthlyChartData} />
+        <div style={{ display: "flex", gap: 14, marginTop: 6, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#6b6455" }}>
+          <span><span style={{ display: "inline-block", width: 9, height: 9, background: "var(--free)", borderRadius: 2, marginRight: 5, verticalAlign: "middle" }} />Ingresos</span>
+          <span><span style={{ display: "inline-block", width: 9, height: 9, background: "var(--debt)", borderRadius: 2, marginRight: 5, verticalAlign: "middle" }} />Gastos</span>
         </div>
       </div>
 
@@ -608,11 +649,51 @@ export default function FinanceLedger() {
           const dueIn = daysUntilDue(it.dueDay, now);
           const cuotasRestantes = Number(it.minPayment) > 0 ? Math.ceil(Number(it.balance) / Number(it.minPayment)) : null;
           const deadlineDays = daysUntilDate(it.deadlineDate, now);
+          const statusLine = (dueIn !== null || cuotasRestantes !== null || deadlineDays !== null) && (
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", marginTop: 5, paddingLeft: 2, fontWeight: 600 }}>
+              {dueIn !== null && (
+                <span style={{ color: dueIn <= 3 ? "var(--debt)" : "#8a7a3d" }}>{dueIn === 0 ? "Vence hoy" : `${dueIn} día${dueIn === 1 ? "" : "s"} para tu próximo pago`}</span>
+              )}
+              {cuotasRestantes !== null && (
+                <span style={{ color: "#6b6455" }}>
+                  ~{cuotasRestantes}{it.totalInstallments ? ` de ${it.totalInstallments}` : ""} cuota{cuotasRestantes === 1 ? "" : "s"} restante{cuotasRestantes === 1 ? "" : "s"}
+                </span>
+              )}
+              {deadlineDays !== null && (
+                <span style={{ color: deadlineDays <= 7 ? "var(--debt)" : "#8a7a3d" }}>
+                  {deadlineDays < 0 ? `Plazo vencido${it.deadlineNote ? ` — ${it.deadlineNote}` : ""}` : deadlineDays === 0 ? `¡Plazo hoy!${it.deadlineNote ? ` — ${it.deadlineNote}` : ""}` : `${deadlineDays} día${deadlineDays === 1 ? "" : "s"} para el plazo${it.deadlineNote ? ` (${it.deadlineNote})` : ""}`}
+                </span>
+              )}
+            </div>
+          );
+
+          if (!expandedDebtIds.includes(it.id)) {
+            return (
+              <div className="debt-card" key={it.id}>
+                <div className="debt-card-top">
+                  <span className="type-tag deuda">Deuda/cuota</span>
+                  <span className="debt-card-name">{it.name}</span>
+                  <div className="debt-card-actions">
+                    <button className="icon-btn" onClick={() => toggleDebtExpanded(it.id)} title="Editar"><Pencil size={13} /></button>
+                    <button className="icon-btn" onClick={() => removeItem(it.id)} title="Eliminar"><Trash2 size={13} /></button>
+                  </div>
+                </div>
+                <div className="debt-card-numbers">
+                  <span className="debt-card-balance">${fmt(Number(it.balance))}</span>
+                  {Number(it.rate) > 0 && <span className="chip-mini">{it.rate}% anual</span>}
+                  {Number(it.minPayment) > 0 && <span className="chip-mini">mín ${fmt(Number(it.minPayment))}</span>}
+                </div>
+                {statusLine}
+              </div>
+            );
+          }
+
           return (
             <div key={it.id} style={{ borderBottom: "1px solid var(--line)", paddingBottom: 6, marginBottom: 6 }}>
               <div className="row" style={{ borderBottom: "none", paddingBottom: 2 }}>
                 <span className="type-tag deuda">Deuda/cuota</span>
                 <input type="text" value={it.name} onChange={(ev) => updateItem(it.id, "name", ev.target.value)} />
+                <button className="icon-btn" onClick={() => toggleDebtExpanded(it.id)} title="Listo"><ChevronDown size={15} /></button>
                 <button className="del" onClick={() => removeItem(it.id)}><Trash2 size={15} /></button>
               </div>
               <div style={{ display: "flex", gap: 12, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#6b6455", paddingLeft: 2 }}>
@@ -651,23 +732,7 @@ export default function FinanceLedger() {
                   onChange={(ev) => updateItem(it.id, "deadlineNote", ev.target.value)}
                   style={{ display: "block", width: "100%", border: "none", borderBottom: "1px dashed var(--line)", background: "transparent", fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", padding: "3px 0", color: "#6b6455" }} />
               </div>
-              {(dueIn !== null || cuotasRestantes !== null || deadlineDays !== null) && (
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", marginTop: 5, paddingLeft: 2, fontWeight: 600 }}>
-                  {dueIn !== null && (
-                    <span style={{ color: dueIn <= 3 ? "var(--debt)" : "#8a7a3d" }}>{dueIn === 0 ? "Vence hoy" : `${dueIn} día${dueIn === 1 ? "" : "s"} para tu próximo pago`}</span>
-                  )}
-                  {cuotasRestantes !== null && (
-                    <span style={{ color: "#6b6455" }}>
-                      ~{cuotasRestantes}{it.totalInstallments ? ` de ${it.totalInstallments}` : ""} cuota{cuotasRestantes === 1 ? "" : "s"} restante{cuotasRestantes === 1 ? "" : "s"}
-                    </span>
-                  )}
-                  {deadlineDays !== null && (
-                    <span style={{ color: deadlineDays <= 7 ? "var(--debt)" : "#8a7a3d" }}>
-                      {deadlineDays < 0 ? `Plazo vencido${it.deadlineNote ? ` — ${it.deadlineNote}` : ""}` : deadlineDays === 0 ? `¡Plazo hoy!${it.deadlineNote ? ` — ${it.deadlineNote}` : ""}` : `${deadlineDays} día${deadlineDays === 1 ? "" : "s"} para el plazo${it.deadlineNote ? ` (${it.deadlineNote})` : ""}`}
-                    </span>
-                  )}
-                </div>
-              )}
+              {statusLine}
             </div>
           );
         })}
@@ -836,24 +901,6 @@ export default function FinanceLedger() {
         ) : (
           <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.85rem", color: "#6b6455" }}>Agrega al menos una deuda o compra a cuotas con saldo mayor a cero para ver el plan.</p>
         )}
-      </div>
-
-      <div className="sheet backup">
-        <h2>Respaldo manual</h2>
-        <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 8px" }}>
-          Tus datos ya se sincronizan solos entre tus dispositivos con tu cuenta. Esto es solo una copia extra en texto, por si quieres guardarla aparte o pasarla a otra cuenta.
-        </p>
-        <button className="go2" onClick={exportBackup}>Exportar mis datos</button>
-        {backupText && (
-          <>
-            <textarea readOnly value={backupText} onFocus={(e) => e.target.select()} />
-            <button className="go2" onClick={copyBackup}>Copiar al portapapeles</button>
-          </>
-        )}
-        <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "10px 0 4px" }}>Restaurar desde un respaldo:</p>
-        <textarea placeholder="Pega aquí el texto de tu respaldo" value={importText} onChange={(e) => setImportText(e.target.value)} />
-        <button className="go2" onClick={importBackup}>Restaurar</button>
-        {backupMsg && <div className="msg">{backupMsg}</div>}
       </div>
     </div>
   );
