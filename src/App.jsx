@@ -548,8 +548,9 @@ export default function FinanceLedger() {
 
   const totalExtraIncome = extraIncomes.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalIncome = Number(incomeFixed) + totalExtraIncome;
+  const totalFixedExpenses = fixedItems.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalExpenses =
-    fixedItems.reduce((s, e) => s + Number(e.amount || 0), 0) +
+    totalFixedExpenses +
     unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalMinPayments = debtItems.reduce((s, d) => s + Number(d.minPayment || 0), 0);
   const disponible = totalIncome - totalExpenses - totalMinPayments;
@@ -633,7 +634,10 @@ export default function FinanceLedger() {
     () => [...paydays].map(Number).filter((n) => n >= 1 && n <= 31).sort((a, b) => a - b),
     [paydays]
   );
-  const perPaydayMin = sortedPaydays.length > 0 ? totalMinPayments / sortedPaydays.length : totalMinPayments;
+  const perPaydayFixedAndMin =
+    sortedPaydays.length > 0
+      ? (totalFixedExpenses + totalMinPayments) / sortedPaydays.length
+      : totalFixedExpenses + totalMinPayments;
   const lastPayday = sortedPaydays[sortedPaydays.length - 1];
 
   // Vista por día: solo existe detalle con fecha para el mes en curso
@@ -955,11 +959,11 @@ export default function FinanceLedger() {
           <div className="plan-summary">
             {sortedPaydays.length > 0 && priorityDebt ? (
               <div className="plan-action">
-                Así reparte tu dinero para deudas y compras a cuotas cada mes:
+                Así reparte tu dinero para gastos fijos, deudas y compras a cuotas cada mes:
                 <ul>
                   {sortedPaydays.map((p) => (
                     <li key={p}>
-                      <b>Día {p}</b>: separa <b>${fmt(perPaydayMin)}</b> para pagos mínimos
+                      <b>Día {p}</b>: separa <b>${fmt(perPaydayFixedAndMin)}</b> para gastos fijos y pagos mínimos
                       {p === lastPayday && disponible > 0 && (
                         <> + <b>${fmt(disponible)}</b> extra hacia <b>{priorityDebt.name}</b> (tu prioridad con {method === "avalanche" ? "la tasa más alta" : "el saldo más bajo"})</>
                       )}.
