@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, Pencil, ChevronDown, RefreshCw } from "lucide-react";
+import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, Pencil, ChevronDown, RefreshCw, Send, Sparkles } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
 /* ------------------------------------------------------------------ */
@@ -245,6 +245,59 @@ function MoneyInput({ value, onChange, className = "", placeholder }) {
   );
 }
 
+// Asistente en lenguaje natural: manda el mensaje del usuario a /api/asistente
+// (una función serverless que llama a Claude) y muestra la interpretación
+// para confirmar antes de aplicar cualquier cambio a los datos.
+function AssistantBar({ onSubmit, pending, loading, error, onConfirm, onCancel }) {
+  const [text, setText] = useState("");
+
+  const handleSend = () => {
+    if (!text.trim() || loading) return;
+    onSubmit(text.trim());
+    setText("");
+  };
+
+  const showConfirm = pending && pending.intent && pending.intent !== "unknown" && pending.intent !== "clarify";
+  const showNote = pending && (pending.intent === "clarify" || pending.intent === "unknown");
+
+  return (
+    <div className="sheet assistant-bar">
+      <h2><Sparkles size={14} />Asistente</h2>
+      <p className="assistant-hint">
+        Cuéntale qué pasó, en una frase: "me gasté 50.000 en comida", "me gané 200.000 extra",
+        "quiero ahorrar 2.000.000 para diciembre", "le aboné 100.000 a mi tarjeta"...
+      </p>
+      <div className="quickadd">
+        <input
+          type="text"
+          placeholder="Escribe aquí..."
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleSend()}
+          disabled={loading}
+        />
+        <button className="go" onClick={handleSend} disabled={loading || !text.trim()}>
+          <Send size={15} />
+        </button>
+      </div>
+      {loading && <p className="assistant-note">Pensando...</p>}
+      {error && <p className="assistant-error">{error}</p>}
+      {showConfirm && (
+        <div className="assistant-confirm">
+          <p>{pending.summary}</p>
+          <div className="assistant-confirm-actions">
+            <button className="assistant-confirm-btn" onClick={onConfirm}>Confirmar</button>
+            <button className="assistant-cancel-btn" onClick={onCancel}>Cancelar</button>
+          </div>
+        </div>
+      )}
+      {showNote && (
+        <p className="assistant-note">{pending.question || pending.summary || "No entendí bien, ¿puedes darme más detalles?"}</p>
+      )}
+    </div>
+  );
+}
+
 function FixedExpenseRow({ item, onUpdate, onRemove }) {
   return (
     <div className="row">
@@ -429,6 +482,14 @@ const APP_STYLES = `
   .chart-value-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
   .chart-value-label { color: #6b6455; font-weight: 600; text-transform: capitalize; }
   .chart-value-nums { display: flex; gap: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .assistant-hint { font-family: -apple-system, sans-serif; font-size: 0.74rem; color: #6b6455; margin: 0 0 8px; }
+  .assistant-error { font-family: -apple-system, sans-serif; font-size: 0.78rem; color: var(--debt); margin: 8px 0 0; }
+  .assistant-confirm { background: rgba(184,145,47,0.12); border-left: 3px solid var(--gold); padding: 10px 12px; margin-top: 10px; font-family: -apple-system, sans-serif; font-size: 0.85rem; color: #6b5215; }
+  .assistant-confirm p { margin: 0; }
+  .assistant-confirm-actions { display: flex; gap: 8px; margin-top: 8px; }
+  .assistant-confirm-btn { background: var(--free); color: #fff; border: none; padding: 7px 14px; font-weight: 600; font-family: -apple-system, sans-serif; font-size: 0.8rem; cursor: pointer; }
+  .assistant-cancel-btn { background: none; border: 1px solid #9a8f77; color: #6b6455; padding: 7px 14px; font-family: -apple-system, sans-serif; font-size: 0.8rem; cursor: pointer; }
+  .assistant-note { font-family: -apple-system, sans-serif; font-size: 0.8rem; color: #6b5215; background: rgba(184,145,47,0.1); padding: 8px 10px; margin-top: 8px; }
 `;
 
 /* ------------------------------------------------------------------ */
@@ -452,6 +513,10 @@ export default function FinanceLedger() {
   const [expandedDebtIds, setExpandedDebtIds] = useState([]);
   const [paydayPickerOpen, setPaydayPickerOpen] = useState(false);
   const [chartMode, setChartMode] = useState("mes"); // "año" | "mes" | "día"
+
+  const [assistantPending, setAssistantPending] = useState(null);
+  const [assistantLoading, setAssistantLoading] = useState(false);
+  const [assistantError, setAssistantError] = useState("");
 
   const loadedRef = useRef(false);
   const monthsRef = useRef({});
@@ -733,6 +798,126 @@ export default function FinanceLedger() {
     setNewUnexpected({ desc: "", amount: "" });
   }, [newUnexpected, now]);
 
+  // --- Asistente en lenguaje natural ---
+  // Envía el mensaje a /api/asistente (función serverless que llama a la IA)
+  // junto con el estado actual, para que pueda hacer match con ítems
+  // existentes y resolver fechas relativas. La respuesta se muestra para
+  // confirmar antes de tocar cualquier dato.
+  const handleAssistantSubmit = useCallback(
+    async (message) => {
+      setAssistantLoading(true);
+      setAssistantError("");
+      setAssistantPending(null);
+      try {
+        const context = {
+          today: now.toISOString().slice(0, 10),
+          dayOfMonth: now.getDate(),
+          month: mKey,
+          incomeFixed: Number(incomeFixed) || 0,
+          paydays,
+          fixedItems: fixedItems.map((it) => ({ id: it.id, name: it.name, amount: it.amount })),
+          debtItems: debtItems.map((it) => ({
+            id: it.id,
+            name: it.name,
+            balance: it.balance,
+            rate: it.rate,
+            minPayment: it.minPayment,
+            totalInstallments: it.totalInstallments,
+            dueDay: it.dueDay,
+            deadlineDate: it.deadlineDate,
+            deadlineNote: it.deadlineNote,
+          })),
+        };
+        const res = await fetch("/api/asistente", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ message, context }),
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          setAssistantError(data.error || "No se pudo procesar el mensaje.");
+          return;
+        }
+        setAssistantPending(data);
+      } catch {
+        setAssistantError("No se pudo conectar con el asistente. Intenta de nuevo.");
+      } finally {
+        setAssistantLoading(false);
+      }
+    },
+    [now, mKey, incomeFixed, paydays, fixedItems, debtItems]
+  );
+
+  // Aplica "op" sobre el valor actual de un campo: "set" reemplaza tal cual
+  // (sirve también para campos de texto como fechas), "increase"/"decrease"
+  // suman o restan numéricamente (p. ej. abonar a una deuda).
+  const applyFieldOp = (current, op, value) => {
+    if (op === "increase" || op === "decrease") {
+      const cur = Number(current) || 0;
+      const val = Number(value) || 0;
+      return op === "increase" ? cur + val : cur - val;
+    }
+    return value;
+  };
+
+  const handleAssistantConfirm = useCallback(() => {
+    const r = assistantPending;
+    if (!r) return;
+    switch (r.intent) {
+      case "unexpected_expense":
+        setUnexpectedExpenses((xs) => [
+          ...xs,
+          { id: uid(), desc: r.desc || "Gasto inesperado", amount: r.amount || 0, day: r.day || now.getDate() },
+        ]);
+        break;
+      case "extra_income":
+        setExtraIncomes((xs) => [
+          ...xs,
+          { id: uid(), desc: r.desc || "Ingreso extra", amount: r.amount || 0, day: r.day || now.getDate() },
+        ]);
+        break;
+      case "new_debt": {
+        const id = uid();
+        setItems((xs) => [
+          ...xs,
+          {
+            id,
+            type: "deuda",
+            name: r.name || "Nueva deuda",
+            balance: r.balance || 0,
+            rate: r.rate || 0,
+            minPayment: r.minPayment || 0,
+            totalInstallments: r.totalInstallments || "",
+            dueDay: r.dueDay || "",
+            deadlineDate: r.deadlineDate || "",
+            deadlineNote: r.deadlineNote || "",
+          },
+        ]);
+        setExpandedDebtIds((xs) => [...xs, id]);
+        break;
+      }
+      case "new_fixed_expense":
+        setItems((xs) => [...xs, { id: uid(), type: "fijo", name: r.name || "Nuevo gasto", amount: r.amount || 0 }]);
+        break;
+      case "update_debt":
+      case "update_fixed_expense":
+        if (r.matchId && r.field) {
+          setItems((xs) =>
+            xs.map((x) => (x.id === r.matchId ? { ...x, [r.field]: applyFieldOp(x[r.field], r.op, r.value) } : x))
+          );
+        }
+        break;
+      case "update_income":
+        setIncomeFixed((cur) => applyFieldOp(cur, r.op, r.value));
+        break;
+      default:
+        break;
+    }
+    setAssistantPending(null);
+  }, [assistantPending, now]);
+
+  const handleAssistantCancel = useCallback(() => setAssistantPending(null), []);
+
   if (authLoading) {
     return <div style={{ background: "#16213e", minHeight: 100 }} />;
   }
@@ -765,6 +950,15 @@ export default function FinanceLedger() {
       <h1>Panel financiero</h1>
       <div className="subtitle">Ingreso, gastos, deudas, ahorro y plan de pago — mes actual</div>
       <Header email={session.user.email} onRefresh={() => window.location.reload()} onSignOut={handleSignOut} />
+
+      <AssistantBar
+        onSubmit={handleAssistantSubmit}
+        pending={assistantPending}
+        loading={assistantLoading}
+        error={assistantError}
+        onConfirm={handleAssistantConfirm}
+        onCancel={handleAssistantCancel}
+      />
 
       <StatsSnapshot
         totalIncome={totalIncome}
