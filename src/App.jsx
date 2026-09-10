@@ -254,9 +254,9 @@ const MiniListItem = memo(function MiniListItem({ x, onUpdate, onRemove }) {
         <input type="text" value={x.desc} onChange={(ev) => onUpdate(x.id, "desc", ev.target.value)} />
         <span className="day">día {x.day}</span>
       </span>
-      <span style={{ display: "flex", alignItems: "center" }}>
+      <span className="mini-edit-amt">
         <MoneyInput value={x.amount} onChange={(val) => onUpdate(x.id, "amount", val)} />
-        <button className="del" style={{ padding: 0 }} onClick={() => onRemove(x.id)}><Trash2 size={13} /></button>
+        <button className="del" onClick={() => onRemove(x.id)}><Trash2 size={13} /></button>
       </span>
     </div>
   );
@@ -421,6 +421,11 @@ const APP_STYLES = `
   .mini-list .item .money-input:focus { outline: none; border-bottom-color: var(--gold); }
   .mini-edit-fields { display: flex; align-items: center; flex: 1; min-width: 0; margin-right: 8px; }
   .mini-edit-fields input[type="text"] { flex: 1; min-width: 0; }
+  .mini-edit-amt { display: flex; align-items: center; }
+  .mini-edit-amt .del { padding: 0; }
+  .hint { font-family: -apple-system, sans-serif; font-size: 0.8rem; color: #6b6455; margin: 4px 0; }
+  .hint-lg { font-family: -apple-system, sans-serif; font-size: 0.85rem; color: #6b6455; }
+  .hint-desc { font-family: -apple-system, sans-serif; font-size: 0.74rem; color: #6b6455; margin: 0 0 8px; }
   .plan-action { font-family: -apple-system, sans-serif; font-size: 0.85rem; background: rgba(63,107,70,0.08); border-left: 3px solid var(--free); padding: 10px 12px; margin: 10px 0; }
   .plan-action ul { margin: 6px 0 0; padding-left: 18px; }
   .plan-action li { margin-bottom: 5px; }
@@ -835,7 +840,7 @@ export default function FinanceLedger() {
             </div>
           </>
         ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>
+          <p className="hint">
             {chartMode === "día"
               ? "Sin movimientos con fecha registrados este mes (ingresos extra, gastos inesperados, días de pago o vencimientos de deudas)."
               : "Aún no hay datos suficientes para mostrar el gráfico."}
@@ -898,7 +903,7 @@ export default function FinanceLedger() {
             </div>
           </div>
         ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>Aún no registras ingresos extra este mes.</p>
+          <p className="hint">Aún no registras ingresos extra este mes.</p>
         )}
       </div>
 
@@ -920,13 +925,13 @@ export default function FinanceLedger() {
             </div>
           </div>
         ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>Sin gastos inesperados registrados este mes.</p>
+          <p className="hint">Sin gastos inesperados registrados este mes.</p>
         )}
       </div>
 
       <div className="sheet">
         <h2>Gastos y deudas</h2>
-        <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 8px" }}>
+        <p className="hint-desc">
           Todo en un solo lugar: lo fijo sin fecha de fin, y lo que tiene saldo — deudas, tarjeta de crédito, compras a cuotas
           o incluso una meta de ahorro (agrégala como deuda con tasa 0% y la fecha en que la quieres cumplida).
         </p>
@@ -954,7 +959,7 @@ export default function FinanceLedger() {
 
       <div className="sheet">
         <h2>Plan de pago</h2>
-        <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 6px" }}>Elige cómo priorizar tu dinero extra entre deudas, compras a cuotas y metas de ahorro:</p>
+        <p className="hint-desc">Elige cómo priorizar tu dinero extra entre deudas, compras a cuotas y metas de ahorro:</p>
         <div className="methods">
           <button className={method === "avalanche" ? "active" : ""} onClick={() => setMethod("avalanche")}><ArrowDownWideNarrow size={14} /> Avalancha (mayor tasa)</button>
           <button className={method === "snowball" ? "active" : ""} onClick={() => setMethod("snowball")}><Flame size={14} /> Bola de nieve (menor saldo)</button>
@@ -1010,7 +1015,7 @@ export default function FinanceLedger() {
             )}
           </div>
         ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.85rem", color: "#6b6455" }}>Agrega al menos una deuda, compra a cuotas o meta de ahorro con saldo mayor a cero para ver el plan.</p>
+          <p className="hint-lg">Agrega al menos una deuda, compra a cuotas o meta de ahorro con saldo mayor a cero para ver el plan.</p>
         )}
       </div>
     </div>
