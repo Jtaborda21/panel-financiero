@@ -96,6 +96,25 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
   return { months, totalInterest, order: payoffOrder, unsustainable: active.length > 0 };
 }
 
+// Sugiere un pago mínimo razonable a partir del saldo, la tasa mensual y
+// (si existe) el número de cuotas. Con cuotas definidas usa la fórmula de
+// cuota fija de amortización (la que cobra un banco en una compra a
+// cuotas); sin cuotas, usa interés del mes + 2% del saldo (típico de una
+// deuda revolvente sin plazo fijo, como una tarjeta de crédito).
+function suggestMinPayment(balance, ratePercent, cuotas) {
+  const n = Number(cuotas);
+  const i = Number(ratePercent) / 100;
+  if (n > 0) {
+    if (i > 0) {
+      const factor = i / (1 - Math.pow(1 + i, -n));
+      return Math.round(balance * factor);
+    }
+    return Math.round(balance / n);
+  }
+  if (i > 0) return Math.round(balance * i + balance * 0.02);
+  return null;
+}
+
 /* ------------------------------------------------------------------ */
 /* Componentes de presentación                                        */
 /* ------------------------------------------------------------------ */
@@ -714,28 +733,31 @@ export default function FinanceLedger() {
       xs.map((x) => {
         if (x.id !== id) return x;
         const next = { ...x, totalInstallments: val };
-        const cuotas = Number(val);
-        if (cuotas > 0 && Number(x.balance) > 0 && !Number(x.minPayment)) {
-          next.minPayment = Math.round(Number(x.balance) / cuotas);
+        const balance = Number(x.balance);
+        if (balance > 0 && !Number(x.minPayment)) {
+          const suggested = suggestMinPayment(balance, x.rate, val);
+          if (suggested) next.minPayment = suggested;
         }
         return next;
       })
     );
   }, []);
 
-  // Sugiere el pago mínimo a partir de la tasa mensual: interés del mes
-  // (saldo × tasa) + 2% del saldo, igual a como calculan el mínimo la
-  // mayoría de tarjetas de crédito. Solo autocompleta si el campo de pago
-  // mínimo está vacío, igual que con el número de cuotas.
+  // Sugiere el pago mínimo según el tipo de deuda. Si tiene un número de
+  // cuotas definido (compra a cuotas fijas), usa la fórmula de cuota fija
+  // que cobran los bancos (amortización): saldo × tasa / (1 − (1+tasa)^−n).
+  // Si no tiene cuotas (deuda revolvente tipo tarjeta sin plazo fijo), usa
+  // interés del mes + 2% del saldo. Solo autocompleta si el campo de pago
+  // mínimo está vacío.
   const updateRate = useCallback((id, val) => {
     setItems((xs) =>
       xs.map((x) => {
         if (x.id !== id) return x;
         const next = { ...x, rate: val };
-        const rate = Number(val);
         const balance = Number(x.balance);
-        if (rate > 0 && balance > 0 && !Number(x.minPayment)) {
-          next.minPayment = Math.round(balance * (rate / 100) + balance * 0.02);
+        if (balance > 0 && !Number(x.minPayment)) {
+          const suggested = suggestMinPayment(balance, val, x.totalInstallments);
+          if (suggested) next.minPayment = suggested;
         }
         return next;
       })
