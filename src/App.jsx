@@ -903,6 +903,28 @@ export default function FinanceLedger() {
       </div>
 
       <div className="sheet">
+        <h2><Zap size={14} />Gasto inesperado — {MONTH_NAMES[now.getMonth()]}</h2>
+        <div className="quickadd">
+          <input type="text" placeholder="¿En qué gastaste?" value={newUnexpected.desc} onChange={(e) => setNewUnexpected((v) => ({ ...v, desc: e.target.value }))} />
+          <input type="number" placeholder="Monto" value={newUnexpected.amount} onChange={(e) => setNewUnexpected((v) => ({ ...v, amount: e.target.value }))} />
+          <button className="go" onClick={addUnexpectedExpense}><Plus size={15} /></button>
+        </div>
+        {unexpectedExpenses.length > 0 ? (
+          <div className="mini-list">
+            {unexpectedExpenses.map((x) => (
+              <MiniListItem key={x.id} x={x} onUpdate={updateUnexpectedExpense} onRemove={removeUnexpectedExpense} />
+            ))}
+            <div className="item" style={{ borderBottom: "none", fontWeight: 700 }}>
+              <span>Total inesperados este mes</span>
+              <span className="amt">${fmt(unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
+            </div>
+          </div>
+        ) : (
+          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>Sin gastos inesperados registrados este mes.</p>
+        )}
+      </div>
+
+      <div className="sheet">
         <h2>Gastos y deudas</h2>
         <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.74rem", color: "#6b6455", margin: "0 0 8px" }}>
           Todo en un solo lugar: lo fijo sin fecha de fin, y lo que tiene saldo — deudas, tarjeta de crédito, compras a cuotas
@@ -928,28 +950,6 @@ export default function FinanceLedger() {
           <button className="addbtn" onClick={addFijo}><Plus size={14} /> Gasto fijo</button>
           <button className="addbtn" onClick={addDeuda}><Plus size={14} /> Deuda o compra a cuotas</button>
         </div>
-      </div>
-
-      <div className="sheet">
-        <h2><Zap size={14} />Gasto inesperado — {MONTH_NAMES[now.getMonth()]}</h2>
-        <div className="quickadd">
-          <input type="text" placeholder="¿En qué gastaste?" value={newUnexpected.desc} onChange={(e) => setNewUnexpected((v) => ({ ...v, desc: e.target.value }))} />
-          <input type="number" placeholder="Monto" value={newUnexpected.amount} onChange={(e) => setNewUnexpected((v) => ({ ...v, amount: e.target.value }))} />
-          <button className="go" onClick={addUnexpectedExpense}><Plus size={15} /></button>
-        </div>
-        {unexpectedExpenses.length > 0 ? (
-          <div className="mini-list">
-            {unexpectedExpenses.map((x) => (
-              <MiniListItem key={x.id} x={x} onUpdate={updateUnexpectedExpense} onRemove={removeUnexpectedExpense} />
-            ))}
-            <div className="item" style={{ borderBottom: "none", fontWeight: 700 }}>
-              <span>Total inesperados este mes</span>
-              <span className="amt">${fmt(unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0))}</span>
-            </div>
-          </div>
-        ) : (
-          <p style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.8rem", color: "#6b6455", margin: "4px 0" }}>Sin gastos inesperados registrados este mes.</p>
-        )}
       </div>
 
       <div className="sheet">
