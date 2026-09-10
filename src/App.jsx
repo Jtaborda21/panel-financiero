@@ -294,7 +294,7 @@ const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove
 
 // Una deuda, tarjeta o compra a cuotas — también sirve para modelar una
 // meta de ahorro (tasa 0%, saldo = lo que falta reunir, fecha límite = meta).
-const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onUpdateInstallments, onUpdateRate }) {
+const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate }) {
   if (!expanded) {
     return (
       <div className="debt-card">
@@ -330,7 +330,7 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
           <input type="number" value={item.balance} onChange={(ev) => onUpdate(item.id, "balance", ev.target.value)} />
         </label>
         <label>Tasa mensual %
-          <input type="number" value={item.rate} onChange={(ev) => onUpdateRate(item.id, ev.target.value)} />
+          <input type="number" value={item.rate} onChange={(ev) => onUpdate(item.id, "rate", ev.target.value)} />
         </label>
       </div>
       <div className="subfields">
@@ -339,7 +339,7 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
         </label>
         <label>N° de cuotas (opcional)
           <input type="number" min="0" placeholder="ej: 12" value={item.totalInstallments}
-            onChange={(ev) => onUpdateInstallments(item.id, ev.target.value)} />
+            onChange={(ev) => onUpdate(item.id, "totalInstallments", ev.target.value)} />
         </label>
       </div>
       <div className="subfields">
@@ -723,42 +723,38 @@ export default function FinanceLedger() {
 
   const chartData = chartMode === "año" ? yearlyChartData : chartMode === "día" ? dailyChartData : monthlyChartData;
 
-  const updateItem = useCallback(
-    (id, field, val) => setItems((xs) => xs.map((x) => (x.id === id ? { ...x, [field]: val } : x))),
-    []
-  );
-
-  const updateInstallments = useCallback((id, val) => {
+  // Actualiza cualquier campo de un gasto fijo o una deuda. Para deudas, el
+  // pago mínimo se recalcula solo a partir del saldo, la tasa mensual y el
+  // número de cuotas — en el orden que los llenes — mientras el usuario no
+  // haya escrito un pago mínimo a mano (minPaymentAuto). Si el usuario edita
+  // el pago mínimo directamente, se respeta esa cifra; si lo borra, vuelve
+  // a calcularse solo.
+  const updateItem = useCallback((id, field, val) => {
     setItems((xs) =>
       xs.map((x) => {
         if (x.id !== id) return x;
-        const next = { ...x, totalInstallments: val };
-        const balance = Number(x.balance);
-        if (balance > 0 && !Number(x.minPayment)) {
-          const suggested = suggestMinPayment(balance, x.rate, val);
-          if (suggested) next.minPayment = suggested;
-        }
-        return next;
-      })
-    );
-  }, []);
+        const next = { ...x, [field]: val };
 
-  // Sugiere el pago mínimo según el tipo de deuda. Si tiene un número de
-  // cuotas definido (compra a cuotas fijas), usa la fórmula de cuota fija
-  // que cobran los bancos (amortización): saldo × tasa / (1 − (1+tasa)^−n).
-  // Si no tiene cuotas (deuda revolvente tipo tarjeta sin plazo fijo), usa
-  // interés del mes + 2% del saldo. Solo autocompleta si el campo de pago
-  // mínimo está vacío.
-  const updateRate = useCallback((id, val) => {
-    setItems((xs) =>
-      xs.map((x) => {
-        if (x.id !== id) return x;
-        const next = { ...x, rate: val };
-        const balance = Number(x.balance);
-        if (balance > 0 && !Number(x.minPayment)) {
-          const suggested = suggestMinPayment(balance, val, x.totalInstallments);
-          if (suggested) next.minPayment = suggested;
+        if (field === "minPayment") {
+          if (val === "" || Number(val) === 0) {
+            const suggested = suggestMinPayment(Number(next.balance), next.rate, next.totalInstallments);
+            next.minPayment = suggested || val;
+            next.minPaymentAuto = true;
+          } else {
+            next.minPaymentAuto = false;
+          }
+        } else if (
+          x.type === "deuda" &&
+          (field === "balance" || field === "rate" || field === "totalInstallments") &&
+          x.minPaymentAuto !== false
+        ) {
+          const suggested = suggestMinPayment(Number(next.balance), next.rate, next.totalInstallments);
+          if (suggested) {
+            next.minPayment = suggested;
+            next.minPaymentAuto = true;
+          }
         }
+
         return next;
       })
     );
@@ -988,8 +984,6 @@ export default function FinanceLedger() {
               onToggleExpand={toggleDebtExpanded}
               onRemove={removeItem}
               onUpdate={updateItem}
-              onUpdateInstallments={updateInstallments}
-              onUpdateRate={updateRate}
             />
           )
         )}
