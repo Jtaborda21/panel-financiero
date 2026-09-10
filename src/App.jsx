@@ -66,7 +66,7 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
   while (active.length > 0 && months < MAX_MONTHS) {
     months++;
     active.forEach((d) => {
-      const interest = d.balance * (d.rate / 100 / 12);
+      const interest = d.balance * (d.rate / 100);
       d.balance += interest;
       totalInterest += interest;
     });
@@ -275,7 +275,7 @@ const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove
 
 // Una deuda, tarjeta o compra a cuotas — también sirve para modelar una
 // meta de ahorro (tasa 0%, saldo = lo que falta reunir, fecha límite = meta).
-const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onUpdateInstallments }) {
+const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onUpdateInstallments, onUpdateRate }) {
   if (!expanded) {
     return (
       <div className="debt-card">
@@ -289,7 +289,7 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
         </div>
         <div className="debt-card-numbers">
           <span className="debt-card-balance">${fmt(Number(item.balance))}</span>
-          {Number(item.rate) > 0 && <span className="chip-mini">{item.rate}% anual</span>}
+          {Number(item.rate) > 0 && <span className="chip-mini">{item.rate}% mensual</span>}
           {Number(item.minPayment) > 0 && <span className="chip-mini">mín ${fmt(Number(item.minPayment))}</span>}
         </div>
         <DebtStatusLine item={item} now={now} />
@@ -310,8 +310,8 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
         <label>Saldo
           <input type="number" value={item.balance} onChange={(ev) => onUpdate(item.id, "balance", ev.target.value)} />
         </label>
-        <label>Tasa anual %
-          <input type="number" value={item.rate} onChange={(ev) => onUpdate(item.id, "rate", ev.target.value)} />
+        <label>Tasa mensual %
+          <input type="number" value={item.rate} onChange={(ev) => onUpdateRate(item.id, ev.target.value)} />
         </label>
       </div>
       <div className="subfields">
@@ -723,6 +723,25 @@ export default function FinanceLedger() {
     );
   }, []);
 
+  // Sugiere el pago mínimo a partir de la tasa mensual: interés del mes
+  // (saldo × tasa) + 2% del saldo, igual a como calculan el mínimo la
+  // mayoría de tarjetas de crédito. Solo autocompleta si el campo de pago
+  // mínimo está vacío, igual que con el número de cuotas.
+  const updateRate = useCallback((id, val) => {
+    setItems((xs) =>
+      xs.map((x) => {
+        if (x.id !== id) return x;
+        const next = { ...x, rate: val };
+        const rate = Number(val);
+        const balance = Number(x.balance);
+        if (rate > 0 && balance > 0 && !Number(x.minPayment)) {
+          next.minPayment = Math.round(balance * (rate / 100) + balance * 0.02);
+        }
+        return next;
+      })
+    );
+  }, []);
+
   const addFijo = useCallback(
     () => setItems((xs) => [...xs, { id: uid(), type: "fijo", name: "Nuevo gasto", amount: 0 }]),
     []
@@ -948,6 +967,7 @@ export default function FinanceLedger() {
               onRemove={removeItem}
               onUpdate={updateItem}
               onUpdateInstallments={updateInstallments}
+              onUpdateRate={updateRate}
             />
           )
         )}
