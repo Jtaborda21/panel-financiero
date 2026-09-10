@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
-import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, Pencil, ChevronDown, RefreshCw } from "lucide-react";
+import { Plus, Trash2, ArrowDownWideNarrow, Flame, CalendarDays, Zap, X, Pencil, ChevronDown, ArrowUp, ArrowDown, RefreshCw } from "lucide-react";
 import { supabase } from "./supabaseClient";
 
 /* ------------------------------------------------------------------ */
@@ -281,12 +281,14 @@ const MiniListItem = memo(function MiniListItem({ x, onUpdate, onRemove }) {
   );
 });
 
-const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove }) {
+const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove, onMove, isFirst, isLast }) {
   return (
     <div className="row">
       <span className="type-tag fijo">Fijo</span>
       <input type="text" value={item.name} onChange={(ev) => onUpdate(item.id, "name", ev.target.value)} />
       <MoneyInput value={item.amount} onChange={(val) => onUpdate(item.id, "amount", val)} />
+      <button className="icon-btn" disabled={isFirst} onClick={() => onMove(item.id, -1)} title="Subir"><ArrowUp size={13} /></button>
+      <button className="icon-btn" disabled={isLast} onClick={() => onMove(item.id, 1)} title="Bajar"><ArrowDown size={13} /></button>
       <button className="del" onClick={() => onRemove(item.id)}><Trash2 size={15} /></button>
     </div>
   );
@@ -294,7 +296,7 @@ const FixedExpenseRow = memo(function FixedExpenseRow({ item, onUpdate, onRemove
 
 // Una deuda, tarjeta o compra a cuotas — también sirve para modelar una
 // meta de ahorro (tasa 0%, saldo = lo que falta reunir, fecha límite = meta).
-const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate }) {
+const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, onRemove, onUpdate, onMove, isFirst, isLast }) {
   if (!expanded) {
     return (
       <div className="debt-card">
@@ -302,6 +304,8 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
           <span className="type-tag deuda">Deuda/cuota</span>
           <span className="debt-card-name">{item.name}</span>
           <div className="debt-card-actions">
+            <button className="icon-btn" disabled={isFirst} onClick={() => onMove(item.id, -1)} title="Subir"><ArrowUp size={13} /></button>
+            <button className="icon-btn" disabled={isLast} onClick={() => onMove(item.id, 1)} title="Bajar"><ArrowDown size={13} /></button>
             <button className="icon-btn" onClick={() => onToggleExpand(item.id)} title="Editar"><Pencil size={13} /></button>
             <button className="icon-btn" onClick={() => onRemove(item.id)} title="Eliminar"><Trash2 size={13} /></button>
           </div>
@@ -321,6 +325,8 @@ const DebtItem = memo(function DebtItem({ item, now, expanded, onToggleExpand, o
       <div className="row" style={{ borderBottom: "none", paddingBottom: 2 }}>
         <span className="type-tag deuda">Deuda/cuota</span>
         <input type="text" value={item.name} onChange={(ev) => onUpdate(item.id, "name", ev.target.value)} />
+        <button className="icon-btn" disabled={isFirst} onClick={() => onMove(item.id, -1)} title="Subir"><ArrowUp size={13} /></button>
+        <button className="icon-btn" disabled={isLast} onClick={() => onMove(item.id, 1)} title="Bajar"><ArrowDown size={13} /></button>
         <button className="icon-btn" onClick={() => onToggleExpand(item.id)} title="Listo"><ChevronDown size={15} /></button>
         <button className="del" onClick={() => onRemove(item.id)}><Trash2 size={15} /></button>
       </div>
@@ -456,6 +462,8 @@ const APP_STYLES = `
   .debt-card-actions { display: flex; gap: 2px; }
   .icon-btn { background: none; border: none; color: #9a8f77; cursor: pointer; padding: 4px; display: flex; align-items: center; }
   .icon-btn:hover { color: var(--ink); }
+  .icon-btn:disabled { opacity: 0.3; cursor: default; }
+  .icon-btn:disabled:hover { color: #9a8f77; }
   .debt-card-numbers { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; padding-left: 2px; }
   .debt-card-balance { font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; font-size: 1rem; font-weight: 700; color: var(--ink); }
   .chip-mini { font-family: -apple-system, sans-serif; font-size: 0.68rem; font-weight: 600; color: #6b6455; background: rgba(28,27,31,0.06); padding: 2px 7px; border-radius: 10px; }
@@ -779,6 +787,20 @@ export default function FinanceLedger() {
     setExpandedDebtIds((xs) => xs.filter((x) => x !== id));
   }, []);
 
+  // Reordena la lista de gastos fijos y deudas: mueve un ítem una posición
+  // hacia arriba (-1) o hacia abajo (+1), sin importar el tipo. Es solo
+  // orden visual — no afecta ningún cálculo.
+  const moveItem = useCallback((id, direction) => {
+    setItems((xs) => {
+      const idx = xs.findIndex((x) => x.id === id);
+      const swapIdx = idx + direction;
+      if (idx === -1 || swapIdx < 0 || swapIdx >= xs.length) return xs;
+      const next = [...xs];
+      [next[idx], next[swapIdx]] = [next[swapIdx], next[idx]];
+      return next;
+    });
+  }, []);
+
   const toggleDebtExpanded = useCallback(
     (id) => setExpandedDebtIds((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id])),
     []
@@ -972,9 +994,17 @@ export default function FinanceLedger() {
           Todo en un solo lugar: lo fijo sin fecha de fin, y lo que tiene saldo — deudas, tarjeta de crédito, compras a cuotas
           o incluso una meta de ahorro (agrégala como deuda con tasa 0% y la fecha en que la quieres cumplida).
         </p>
-        {items.map((it) =>
+        {items.map((it, idx) =>
           it.type === "fijo" ? (
-            <FixedExpenseRow key={it.id} item={it} onUpdate={updateItem} onRemove={removeItem} />
+            <FixedExpenseRow
+              key={it.id}
+              item={it}
+              onUpdate={updateItem}
+              onRemove={removeItem}
+              onMove={moveItem}
+              isFirst={idx === 0}
+              isLast={idx === items.length - 1}
+            />
           ) : (
             <DebtItem
               key={it.id}
@@ -984,6 +1014,9 @@ export default function FinanceLedger() {
               onToggleExpand={toggleDebtExpanded}
               onRemove={removeItem}
               onUpdate={updateItem}
+              onMove={moveItem}
+              isFirst={idx === 0}
+              isLast={idx === items.length - 1}
             />
           )
         )}
