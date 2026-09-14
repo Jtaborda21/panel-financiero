@@ -22,6 +22,9 @@ const MONTH_NAMES = [
   "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
 ];
 
+// Colores para distinguir cada deuda en la gráfica de proyección mes a mes.
+const DEBT_CHART_COLORS = ["#a3384a", "#b8912f", "#3f6b46", "#4a6fa5", "#8a4fa0", "#c2703d", "#2d7d8a"];
+
 function daysUntilDue(dueDay, today) {
   const day = Number(dueDay);
   if (!day || day < 1 || day > 31) return null;
@@ -55,12 +58,13 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
   let active = debtsInput
     .filter((d) => d.balance > 0)
     .map((d) => ({ ...d, balance: Number(d.balance), minPayment: Number(d.minPayment) }));
-  if (active.length === 0) return { months: 0, totalInterest: 0, order: [], unsustainable: false };
+  if (active.length === 0) return { months: 0, totalInterest: 0, order: [], unsustainable: false, schedule: [] };
 
   let months = 0;
   let totalInterest = 0;
   let extraPool = extraBudget;
   const payoffOrder = [];
+  const schedule = [];
   const MAX_MONTHS = 600;
 
   while (active.length > 0 && months < MAX_MONTHS) {
@@ -74,12 +78,15 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
     active.sort((a, b) => (method === "avalanche" ? b.rate - a.rate : a.balance - b.balance));
 
     let pool = extraPool;
+    const monthEntries = [];
     active.forEach((d, idx) => {
       let pay = d.minPayment;
       if (idx === 0) pay += pool;
       pay = Math.min(pay, d.balance);
       d.balance -= pay;
+      monthEntries.push({ id: d.id, name: d.name, payment: pay, balanceAfter: d.balance });
     });
+    schedule.push({ month: months, entries: monthEntries });
 
     const stillActive = [];
     active.forEach((d) => {
@@ -93,7 +100,7 @@ function simulateDebtPlan(debtsInput, extraBudget, method) {
     active = stillActive;
   }
 
-  return { months, totalInterest, order: payoffOrder, unsustainable: active.length > 0 };
+  return { months, totalInterest, order: payoffOrder, unsustainable: active.length > 0, schedule };
 }
 
 // Sugiere un pago mínimo razonable a partir del saldo, la tasa mensual y
@@ -154,6 +161,55 @@ const ChartLegend = memo(function ChartLegend() {
     <div style={{ display: "flex", gap: 14, marginTop: 6, fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#6b6455" }}>
       <span><span className="legend-dot" style={{ background: "var(--free)" }} />Ingresos</span>
       <span><span className="legend-dot" style={{ background: "var(--debt)" }} />Gastos</span>
+    </div>
+  );
+});
+
+// Gráfica de líneas: el saldo de cada deuda bajando mes a mes hasta llegar a
+// cero (el punto donde queda liquidada), a partir del calendario de pagos
+// que arma simulateDebtPlan.
+const DebtProjectionChart = memo(function DebtProjectionChart({ schedule, debts, now }) {
+  const points = schedule.length + 1; // incluye el mes 0 (hoy)
+  const chartH = 130;
+  const padX = 6;
+  const width = Math.max(260, points * 16);
+  const maxBalance = Math.max(1, ...debts.map((d) => Number(d.balance)));
+  const xFor = (i) => padX + (i * (width - padX * 2)) / Math.max(1, points - 1);
+  const yFor = (v) => chartH - (v / maxBalance) * chartH;
+
+  const series = debts.map((d, i) => {
+    let bal = Number(d.balance);
+    const values = [bal];
+    schedule.forEach((m) => {
+      const entry = m.entries.find((e) => e.id === d.id);
+      bal = entry ? Math.max(0, entry.balanceAfter) : 0;
+      values.push(bal);
+    });
+    return { id: d.id, color: DEBT_CHART_COLORS[i % DEBT_CHART_COLORS.length], values };
+  });
+
+  const labelEvery = Math.max(1, Math.ceil(points / 8));
+  const labelIdxs = Array.from({ length: points }, (_, i) => i).filter((i) => i % labelEvery === 0 || i === points - 1);
+
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <svg width={width} height={chartH + 22} viewBox={`0 0 ${width} ${chartH + 22}`} style={{ display: "block", minWidth: "100%" }}>
+        {series.map((s) => (
+          <polyline key={s.id} fill="none" stroke={s.color} strokeWidth="2" points={s.values.map((v, i) => `${xFor(i)},${yFor(v)}`).join(" ")} />
+        ))}
+        {series.map((s) => {
+          const zeroIdx = s.values.findIndex((v) => v <= 0);
+          return zeroIdx === -1 ? null : <circle key={`${s.id}-dot`} cx={xFor(zeroIdx)} cy={yFor(0)} r="3" fill={s.color} />;
+        })}
+        {labelIdxs.map((i) => {
+          const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+          return (
+            <text key={i} x={xFor(i)} y={chartH + 15} textAnchor="middle" fontSize="9" fontFamily="-apple-system, sans-serif" fill="#6b6455">
+              {i === 0 ? "hoy" : MONTH_NAMES[d.getMonth()].slice(0, 3)}
+            </text>
+          );
+        })}
+      </svg>
     </div>
   );
 });
@@ -483,6 +539,13 @@ const APP_STYLES = `
   .chart-value-row { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
   .chart-value-label { color: #6b6455; font-weight: 600; text-transform: capitalize; }
   .chart-value-nums { display: flex; gap: 10px; font-family: 'SFMono-Regular', Consolas, monospace; font-variant-numeric: tabular-nums; }
+  .projection-list { max-height: 340px; overflow-y: auto; margin-top: 4px; }
+  .month-block { border-bottom: 1px solid var(--line); padding: 8px 0; }
+  .month-block:last-child { border-bottom: none; }
+  .month-title { font-family: -apple-system, sans-serif; font-size: 0.82rem; font-weight: 700; color: var(--ink); text-transform: capitalize; margin-bottom: 4px; }
+  .month-row { display: flex; justify-content: space-between; gap: 8px; font-family: -apple-system, sans-serif; font-size: 0.76rem; color: #6b6455; padding: 3px 0; }
+  .month-row b { font-family: 'SFMono-Regular', Consolas, monospace; color: var(--ink); }
+  .month-row.done { color: var(--free); font-weight: 600; }
 `;
 
 /* ------------------------------------------------------------------ */
@@ -604,11 +667,20 @@ export default function FinanceLedger() {
   const totalExtraIncome = extraIncomes.reduce((s, e) => s + Number(e.amount || 0), 0);
   const totalIncome = Number(incomeFixed) + totalExtraIncome;
   const totalFixedExpenses = fixedItems.reduce((s, e) => s + Number(e.amount || 0), 0);
-  const totalExpenses =
-    totalFixedExpenses +
-    unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const totalUnexpectedExpenses = unexpectedExpenses.reduce((s, e) => s + Number(e.amount || 0), 0);
+  const totalExpenses = totalFixedExpenses + totalUnexpectedExpenses;
   const totalMinPayments = debtItems.reduce((s, d) => s + Number(d.minPayment || 0), 0);
   const disponible = totalIncome - totalExpenses - totalMinPayments;
+  // Disponible "recurrente": solo con sueldo fijo, gastos fijos y pagos
+  // mínimos — sin ingresos extra ni gastos inesperados del mes en curso,
+  // porque esos no se repiten cada mes. Es lo que se usa para proyectar el
+  // plan de pago (meses para quedar libre, interés total), para que esa
+  // proyección no dependa de algo puntual que podría no repetirse.
+  const baseDisponible = Number(incomeFixed) - totalFixedExpenses - totalMinPayments;
+  // Extra neto de este mes (ingresos extra − gastos inesperados ya
+  // registrados): un abono puntual, válido solo hasta fin de mes, cuando ya
+  // no vaya a aparecer otro gasto inesperado que lo necesite.
+  const monthNetExtra = totalExtraIncome - totalUnexpectedExpenses;
 
   // Guardado con debounce: cada cambio relevante actualiza el snapshot del
   // mes actual y programa un upsert a Supabase.
@@ -673,9 +745,9 @@ export default function FinanceLedger() {
   }, [allMonthsMap]);
 
   const plan = useMemo(() => {
-    if (disponible <= 0) return null;
-    return simulateDebtPlan(debtItems, disponible, method);
-  }, [debtItems, disponible, method]);
+    if (baseDisponible <= 0) return null;
+    return simulateDebtPlan(debtItems, baseDisponible, method);
+  }, [debtItems, baseDisponible, method]);
 
   const activeDebts = useMemo(() => debtItems.filter((d) => Number(d.balance) > 0), [debtItems]);
   const priorityDebt = useMemo(() => {
@@ -1049,10 +1121,10 @@ export default function FinanceLedger() {
           );
         })()}
 
-        {disponible <= 0 ? (
+        {baseDisponible <= 0 ? (
           <div className="warn">
-            Tus gastos y pagos mínimos (${fmt(totalExpenses + totalMinPayments)}) superan o igualan tu ingreso (${fmt(totalIncome)}).
-            No hay dinero extra para acelerar el pago de deudas y compras a cuotas — ajusta gastos o aumenta ingreso antes de planear.
+            Tus gastos fijos y pagos mínimos (${fmt(totalFixedExpenses + totalMinPayments)}) superan o igualan tu sueldo fijo (${fmt(Number(incomeFixed))}).
+            No hay dinero extra recurrente para acelerar el pago de deudas y compras a cuotas — ajusta gastos o aumenta ingreso antes de planear.
           </div>
         ) : plan && plan.order.length > 0 ? (
           <div className="plan-summary">
@@ -1063,8 +1135,8 @@ export default function FinanceLedger() {
                   {sortedPaydays.map((p) => (
                     <li key={p}>
                       <b>Día {p}</b>: separa <b>${fmt(perPaydayFixedAndMin)}</b> para gastos fijos y pagos mínimos
-                      {p === lastPayday && disponible > 0 && (
-                        <> + <b>${fmt(disponible)}</b> extra hacia <b>{priorityDebt.name}</b> (tu prioridad con {method === "avalanche" ? "la tasa más alta" : "el saldo más bajo"})</>
+                      {p === lastPayday && baseDisponible > 0 && (
+                        <> + <b>${fmt(baseDisponible)}</b> extra hacia <b>{priorityDebt.name}</b> (tu prioridad con {method === "avalanche" ? "la tasa más alta" : "el saldo más bajo"})</>
                       )}.
                     </li>
                   ))}
@@ -1082,9 +1154,61 @@ export default function FinanceLedger() {
             ) : (
               <>Quedarás libre de deudas y cuotas en aproximadamente <b>{plan.months}</b> meses, pagando un total estimado de <b>${fmt(plan.totalInterest)}</b> en intereses.</>
             )}
+            {monthNetExtra > 0 && priorityDebt && (
+              <div className="plan-action" style={{ marginTop: 10 }}>
+                Aparte, este mes llevas <b>${fmt(monthNetExtra)}</b> de extra neto (tus ingresos extra menos los gastos inesperados que ya registraste). No lo cuento en el plan de arriba porque no se repite cada mes — ábonalo a <b>{priorityDebt.name}</b> solo <b>a fin de mes</b>, cuando ya estés seguro de que no te va a hacer falta para otro imprevisto.
+              </div>
+            )}
           </div>
         ) : (
           <p className="hint-lg">Agrega al menos una deuda, compra a cuotas o meta de ahorro con saldo mayor a cero para ver el plan.</p>
+        )}
+      </div>
+
+      <div className="sheet">
+        <h2>Proyección mes a mes</h2>
+        <p className="hint-desc">Cómo baja el saldo de cada deuda mes a mes hasta quedar liquidada, pagando el mínimo de cada una más el extra recurrente.</p>
+        {plan && plan.schedule && plan.schedule.length > 0 ? (
+          (() => {
+            const visibleSchedule = plan.schedule.slice(0, 60);
+            return (
+              <>
+                <DebtProjectionChart schedule={visibleSchedule} debts={activeDebts} now={now} />
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 12, margin: "8px 0 4px" }}>
+                  {activeDebts.map((d, i) => (
+                    <span key={d.id} style={{ fontFamily: "-apple-system, sans-serif", fontSize: "0.72rem", color: "#6b6455" }}>
+                      <span className="legend-dot" style={{ background: DEBT_CHART_COLORS[i % DEBT_CHART_COLORS.length] }} />{d.name}
+                    </span>
+                  ))}
+                </div>
+                <div className="projection-list">
+                  {visibleSchedule.map((m) => {
+                    const d = new Date(now.getFullYear(), now.getMonth() + m.month, 1);
+                    const label = `${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+                    return (
+                      <div className="month-block" key={m.month}>
+                        <div className="month-title">{label}</div>
+                        {m.entries.map((e) => (
+                          <div className={`month-row${e.balanceAfter <= 0 ? " done" : ""}`} key={e.id}>
+                            <span>{e.name}</span>
+                            <span>
+                              pagas <b>${fmt(e.payment)}</b>
+                              {e.balanceAfter <= 0 ? " — liquidada ✓" : <> — queda <b>${fmt(e.balanceAfter)}</b></>}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {plan.schedule.length > 60 && (
+                    <p className="hint">Mostrando los primeros 60 meses. Con el extra actual te faltarían {plan.schedule.length - 60} meses más para quedar completamente libre.</p>
+                  )}
+                </div>
+              </>
+            );
+          })()
+        ) : (
+          <p className="hint">Agrega una deuda con saldo y asegúrate de tener dinero extra recurrente disponible para ver la proyección mes a mes.</p>
         )}
       </div>
     </div>
